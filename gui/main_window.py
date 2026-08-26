@@ -20,7 +20,7 @@ class MainWindow(ctk.CTk):
         super().__init__()
         
         self.title("Modern Robot Control HMI")
-        self.geometry("1024x720")
+        self.geometry("1200x800")
         
         # 1. Initialize logic components
         self.config = ConfigManager()
@@ -43,31 +43,51 @@ class MainWindow(ctk.CTk):
         # 4. Construct Layout
         self._create_widgets()
         self._update_coordinates()
+        
+        # Force Tkinter to update and map widgets to obtain valid HWND and layout sizes
+        self.update()
+        
+        # 5. Launch 3D Viewer directly in the right panel
+        self._launch_viewer()
 
     def _create_widgets(self):
-        # Configure layout grids
-        self.grid_columnconfigure(0, weight=1) # Control Panel
-        self.grid_columnconfigure(1, weight=1) # Position Monitors
-        self.grid_rowconfigure(0, weight=1)
+        import tkinter as tk
         
-        # Left Panel (Connection & Jog Controls)
-        self.left_panel = ctk.CTkFrame(self, corner_radius=10)
-        self.left_panel.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        # Create PanedWindow for horizontal split
+        self.main_pane = tk.PanedWindow(self, orient=tk.HORIZONTAL, bg="#1a1a1a", bd=0, sashwidth=6, sashpad=2, relief="flat")
+        self.main_pane.pack(fill="both", expand=True)
+        
+        # Left Panel (Control Panel)
+        self.left_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
         self.left_panel.grid_columnconfigure(0, weight=1)
+        self.main_pane.add(self.left_panel, width=420, minsize=350)
         
+        # Right Panel (3D Viewer Container)
+        self.right_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
+        self.right_panel.grid_columnconfigure(0, weight=1)
+        self.right_panel.grid_rowconfigure(0, weight=1)
+        self.main_pane.add(self.right_panel, minsize=400)
+        
+        # Create Tabview inside left_panel
+        self.tabview = ctk.CTkTabview(self.left_panel, corner_radius=10)
+        self.tabview.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        self.tab_control = self.tabview.add("Control")
+        self.tab_config = self.tabview.add("Config")
+        
+        self.tab_control.grid_columnconfigure(0, weight=1)
+        self.tab_config.grid_columnconfigure(0, weight=1)
+        
+        # Create control elements inside the Control tab
         self._create_connection_frame()
+        self._create_coordinate_frame()
         self._create_jog_frame()
         
-        # Right Panel (XYZ Coordinates & Viewer Launcher)
-        self.right_panel = ctk.CTkFrame(self, corner_radius=10)
-        self.right_panel.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
-        self.right_panel.grid_columnconfigure(0, weight=1)
-        
-        self._create_coordinate_frame()
-        self._create_viewer_frame()
+        # Create configuration elements inside the Config tab
+        self._create_config_tab_widgets()
 
     def _create_connection_frame(self):
-        conn_frame = ctk.CTkLabelFrame(self.left_panel, text="Serial Connection")
+        conn_frame = ctk.CTkLabelFrame(self.tab_control, text="Serial Connection")
         conn_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         conn_frame.grid_columnconfigure(0, weight=1)
         conn_frame.grid_columnconfigure(1, weight=1)
@@ -84,8 +104,8 @@ class MainWindow(ctk.CTk):
         self.connect_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
 
     def _create_jog_frame(self):
-        jog_frame = ctk.CTkLabelFrame(self.left_panel, text="Joint Jog Controls")
-        jog_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        jog_frame = ctk.CTkLabelFrame(self.tab_control, text="Joint Jog Controls")
+        jog_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
         jog_frame.grid_columnconfigure(0, weight=1)
         
         self.sliders = []
@@ -116,10 +136,19 @@ class MainWindow(ctk.CTk):
             val_lbl = ctk.CTkLabel(j_row, text=f"{self.joint_angles[i]:.2f}°", width=60)
             val_lbl.grid(row=0, column=2, padx=5)
             self.angle_labels.append(val_lbl)
+            
+        # Add Go to Home button at the bottom of the Jog frame
+        home_btn = ctk.CTkButton(
+            jog_frame,
+            text="Go to Home (Về Home)",
+            height=40,
+            command=self._go_to_home
+        )
+        home_btn.grid(row=6, column=0, padx=10, pady=15, sticky="ew")
 
     def _create_coordinate_frame(self):
-        self.coord_frame = ctk.CTkLabelFrame(self.right_panel, text="Cartesian Position (TCP)")
-        self.coord_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        self.coord_frame = ctk.CTkLabelFrame(self.tab_control, text="Cartesian Position (TCP)")
+        self.coord_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         self.coord_frame.grid_columnconfigure((0, 1), weight=1)
         
         self.xyz_labels = {}
@@ -137,19 +166,6 @@ class MainWindow(ctk.CTk):
             lbl = ctk.CTkLabel(self.coord_frame, text=lbl_text, font=("Arial", 16, "bold"))
             lbl.grid(row=row, column=col, padx=20, pady=15, sticky="w")
             self.xyz_labels[axis] = lbl
-
-    def _create_viewer_frame(self):
-        viewer_frame = ctk.CTkLabelFrame(self.right_panel, text="3D Visualizer")
-        viewer_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-        viewer_frame.grid_columnconfigure(0, weight=1)
-        
-        btn = ctk.CTkButton(
-            viewer_frame, 
-            text="Launch 3D Robot Viewer", 
-            height=60, 
-            command=self._launch_viewer
-        )
-        btn.grid(row=0, column=0, padx=20, pady=40, sticky="ew")
 
     def _toggle_connection(self):
         if not self.serial.running:
@@ -188,13 +204,127 @@ class MainWindow(ctk.CTk):
             self.xyz_labels[axis].configure(text=f"{axis}: {val:.2f}{unit}")
 
     def _launch_viewer(self):
-        self.viewer.launch()
+        self.viewer.launch(self.right_panel)
         # Apply initial joint rotation values to the VTK assembly
         self.viewer.update_joints(self.joint_angles)
 
     def _on_serial_feedback(self, data):
         """Callback run when receiving feedback strings from the serial port."""
         print(f"[UI Serial Feedback]: {data}")
+
+    def _create_config_tab_widgets(self):
+        # 1. DH Parameters grid frame
+        dh_frame = ctk.CTkLabelFrame(self.tab_config, text="DH Parameters Editor (J1-J6)")
+        dh_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        dh_frame.grid_columnconfigure(0, weight=1) # Joint label column
+        dh_frame.grid_columnconfigure((1, 2, 3, 4), weight=2)
+        
+        # Header Labels
+        headers = ["Joint", "Theta (θ)", "Alpha (α)", "d (mm)", "a (mm)"]
+        for col_idx, header in enumerate(headers):
+            lbl = ctk.CTkLabel(dh_frame, text=header, font=("Arial", 11, "bold"))
+            lbl.grid(row=0, column=col_idx, padx=2, pady=5)
+            
+        # 24 Entry fields for DH parameters
+        self.dh_entries = {}
+        param_keys = ["Θ", "α", "d", "a"]
+        
+        for row_idx in range(6):
+            j_lbl = ctk.CTkLabel(dh_frame, text=f"J{row_idx+1}", font=("Arial", 11, "bold"))
+            j_lbl.grid(row=row_idx+1, column=0, padx=2, pady=3)
+            
+            for col_idx, param in enumerate(param_keys):
+                cfg_key = f"J{row_idx+1}{param}DHpar"
+                val = self.config.get(cfg_key, "0.0")
+                
+                entry = ctk.CTkEntry(dh_frame, width=60, justify="center")
+                entry.insert(0, str(val))
+                entry.grid(row=row_idx+1, column=col_idx+1, padx=2, pady=3)
+                self.dh_entries[(row_idx+1, param)] = entry
+                
+        # 2. STL Path configuration frame
+        path_frame = ctk.CTkLabelFrame(self.tab_config, text="Robot 3D Model STL Directory")
+        path_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        path_frame.grid_columnconfigure(0, weight=1)
+        
+        self.stl_path_entry = ctk.CTkEntry(path_frame, placeholder_text="Select folder containing STL files")
+        self.stl_path_entry.insert(0, self.viewer.stl_dir)
+        self.stl_path_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        browse_btn = ctk.CTkButton(path_frame, text="Browse", width=60, command=self._browse_stl_dir)
+        browse_btn.grid(row=0, column=1, padx=5, pady=10)
+        
+        # 3. Apply Button
+        apply_btn = ctk.CTkButton(self.tab_config, text="Apply & Save Config", height=40, command=self._apply_and_save_config)
+        apply_btn.grid(row=2, column=0, padx=10, pady=15, sticky="ew")
+
+    def _browse_stl_dir(self):
+        from tkinter import filedialog
+        path = filedialog.askdirectory(initialdir=self.viewer.stl_dir)
+        if path:
+            self.stl_path_entry.delete(0, "end")
+            self.stl_path_entry.insert(0, path)
+
+    def _apply_and_save_config(self):
+        import os
+        from tkinter import messagebox
+        
+        # 1. Validate and read DH entries
+        param_keys = ["Θ", "α", "d", "a"]
+        temp_data = {}
+        for row_idx in range(6):
+            for param in param_keys:
+                entry = self.dh_entries[(row_idx+1, param)]
+                val = entry.get().strip()
+                try:
+                    float(val)
+                except ValueError:
+                    messagebox.showerror("Validation Error", f"Invalid numeric value '{val}' for J{row_idx+1} {param}")
+                    return
+                temp_data[f"J{row_idx+1}{param}DHpar"] = val
+                
+        # Validate STL path
+        stl_dir = self.stl_path_entry.get().strip()
+        if not os.path.exists(stl_dir):
+            messagebox.showerror("Validation Error", f"STL directory does not exist: {stl_dir}")
+            return
+            
+        # 2. Save values in ConfigManager
+        for k, v in temp_data.items():
+            self.config.config_data[k] = v
+        self.config.save_config()
+        
+        # 3. Re-initialize Kinematics
+        self.kinematics.initialize_kinematics()
+        
+        # 4. Reload VTK Viewer model
+        self.viewer.reload_robot(new_stl_dir=stl_dir)
+        
+        # 5. Recompute current position labels
+        self._update_coordinates()
+        
+        messagebox.showinfo("Success", "Configuration applied and saved successfully!")
+
+    def _go_to_home(self):
+        # 1. Reset state joint angles to 0.0
+        self.joint_angles = [0.0] * 6
+        
+        # 2. Update sliders, labels and config values
+        for i in range(6):
+            self.sliders[i].set(0.0)
+            self.angle_labels[i].configure(text="0.00°")
+            self.config.set(f"J{i+1}AngCur", "0.0000")
+            
+        # 3. Trigger 3D model update
+        if self.viewer.vtk_running:
+            self.viewer.update_joints(self.joint_angles)
+            
+        # 4. Update XYZ math coordinates display
+        self._update_coordinates()
+        
+        # 5. Send serial updates
+        self.serial.send_move_command(self.joint_angles)
 
     def on_closing(self):
         # Graceful cleanup

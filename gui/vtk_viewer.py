@@ -44,26 +44,29 @@ class VTKViewer:
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.stl_dir = os.path.join(base_dir, "assets", "robot_model")
 
-    def launch(self):
-        """Launches the non-blocking VTK render window."""
+    def launch(self, parent_widget):
+        """Launches the VTK render window embedded in the parent Tkinter widget using Win32 SetParent."""
         if self.vtk_running:
             return
             
         self.vtk_running = True
         
+        import ctypes
+        from ctypes import wintypes
+        import sys
+        
+        # 1. Create standard VTK Renderer and RenderWindow
         self.renderer = vtk.vtkRenderer()
         self.render_window = vtk.vtkRenderWindow()
-        self.render_window.SetWindowName("Robot 3D Viewer")
-        
-        self.interactor = vtk.vtkRenderWindowInteractor()
         self.render_window.AddRenderer(self.renderer)
-        self.interactor.SetRenderWindow(self.render_window)
+        self.render_window.BordersOff()
         
-        # Interactor style (allow camera rotation)
+        # 2. Setup standard Interactor
+        self.interactor = vtk.vtkRenderWindowInteractor()
+        self.interactor.SetRenderWindow(self.render_window)
         style = vtk.vtkInteractorStyleTrackballCamera()
         self.interactor.SetInteractorStyle(style)
         
-        self.render_window.SetSize(800, 600)
         self.renderer.SetBackground(vtk.vtkNamedColors().GetColor3d("LightSlateGray"))
         
         self._build_robot_actors()
@@ -78,24 +81,78 @@ class VTKViewer:
         camera.SetViewUp(0, 0, 1)
         self.renderer.ResetCameraClippingRange()
         
-        # Handle close window event
-        self.interactor.AddObserver("ExitEvent", self._on_close)
-        
+        # 3. Initialize VTK Window (generates HWND)
         self.interactor.Initialize()
         self.render_window.Render()
         
-        # Start the periodic update loop linked to Tkinter
-        self._periodic_update()
+        # 4. Reparent using Win32 API
+        hwnd_child = self.render_window.GetGenericWindowId()
+        if isinstance(hwnd_child, str):
+            hwnd_child_int = int(hwnd_child.strip('_').split('_')[0], 16)
+        else:
+            hwnd_child_int = int(hwnd_child)
+            
+        hwnd_parent = parent_widget.winfo_id()
+        
+        is_64bit = sys.maxsize > 2**32
+        user32 = ctypes.windll.user32
+        
+        # Configure ctypes argument types for 32/64-bit safety
+        user32.SetParent.argtypes = [wintypes.HWND, wintypes.HWND]
+        user32.SetParent.restype = wintypes.HWND
+        
+        if is_64bit and hasattr(user32, "SetWindowLongPtrW"):
+            SetWindowLong = user32.SetWindowLongPtrW
+            GetWindowLong = user32.GetWindowLongPtrW
+            LONG_PTR = ctypes.c_int64
+        else:
+            SetWindowLong = user32.SetWindowLongW
+            GetWindowLong = user32.GetWindowLongW
+            LONG_PTR = ctypes.c_long
+            
+        GetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int]
+        GetWindowLong.restype = LONG_PTR
+        SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, LONG_PTR]
+        SetWindowLong.restype = LONG_PTR
+        
+        user32.MoveWindow.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.BOOL]
+        user32.MoveWindow.restype = wintypes.BOOL
+        
+        # Perform Reparenting
+        user32.SetParent(hwnd_child_int, int(hwnd_parent))
+        
+        # Change Window Styles to WS_CHILD | WS_VISIBLE
+        GWL_STYLE = -16
+        WS_CHILD = 0x40000000
+        WS_POPUP = 0x80000000
+        WS_VISIBLE = 0x10000000
+        
+        style_val = GetWindowLong(hwnd_child_int, GWL_STYLE)
+        style_val = (style_val & ~WS_POPUP) | WS_CHILD | WS_VISIBLE
+        SetWindowLong(hwnd_child_int, GWL_STYLE, style_val)
+        
+        # 5. Define Resize Event Handler
+        def on_resize(event):
+            if event is not None and event.widget != parent_widget:
+                return
+            w = parent_widget.winfo_width()
+            h = parent_widget.winfo_height()
+            if self.vtk_running and self.render_window:
+                user32.MoveWindow(hwnd_child_int, 0, 0, w, h, True)
+                self.render_window.SetSize(w, h)
+                self.render_window.Render()
+                
+        parent_widget.bind("<Configure>", on_resize)
+        on_resize(None)
+        
+        # 6. Start the periodic event pump loop to keep interactor responsive
+        def event_loop():
+            if self.vtk_running and self.interactor:
+                self.interactor.ProcessEvents()
+                parent_widget.after(10, event_loop)
+                
+        event_loop()
 
-    def _on_close(self, obj, event):
-        self.vtk_running = False
-        print("[INFO] VTK Viewer closed.")
-
-    def _periodic_update(self):
-        """Tkinter-driven rendering loop (Runs ~60 FPS)."""
-        if self.vtk_running and self.render_window:
-            self.render_window.Render()
-            self.root.after(16, self._periodic_update)
 
     def update_joints(self, joint_angles):
         """Updates the rotations of the robot parts.
@@ -124,6 +181,39 @@ class VTKViewer:
                 ct.Identity()
                 ct.Concatenate(self.base_transforms[stl])
                 ct.Concatenate(jt)
+                
+        self.render_window.Render()
+
+    def reload_robot(self, new_stl_dir=None):
+        """Reloads the robot actors, potentially from a new STL folder."""
+        if not self.vtk_running:
+            return
+            
+        # 1. Remove the old root assembly actor from the renderer
+        if "Link Base-1.STL" in self.assemblies:
+            root = self.assemblies["Link Base-1.STL"]
+            self.renderer.RemoveActor(root)
+            
+        # 2. Reset STL directory if provided
+        if new_stl_dir:
+            self.stl_dir = new_stl_dir
+            
+        # 3. Clear existing components
+        self.actors.clear()
+        self.assemblies.clear()
+        self.base_transforms.clear()
+        self.joint_transforms.clear()
+        self.composite_transforms.clear()
+        
+        # 4. Rebuild robot actors and add them
+        self._build_robot_actors()
+        
+        # 5. Apply current joint rotation values
+        self.update_joints(self.root.joint_angles)
+        
+        # 6. Reset camera view and re-render
+        self.renderer.ResetCamera()
+        self.render_window.Render()
 
     def _build_robot_actors(self):
         """Loads STL files, applies offsets, and builds parent-child joints chain."""

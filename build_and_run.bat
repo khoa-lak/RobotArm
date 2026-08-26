@@ -1,43 +1,37 @@
-﻿@echo off
-cd /d %~dp0
-echo ============================================================
-echo KICH HOAT MOI TRUONG AO VA CAI DAT THU VIEN...
-echo ============================================================
+@echo off
+echo =======================================================
+echo Dang khoi dong ung dung RobotArm HMI...
+echo =======================================================
 
-if exist venv\Scripts\activate.bat (
-    call venv\Scripts\activate.bat
-) else if exist ..\venv\Scripts\activate.bat (
-    call ..\venv\Scripts\activate.bat
-) else if exist ..\firmware-AR4_ar4-hmi\venv\Scripts\activate.bat (
-    call ..\firmware-AR4_ar4-hmi\venv\Scripts\activate.bat
-) else (
-    echo [INFO] Khong tim thay venv san co. Dang tao virtual environment moi (venv)...
-    py -3.12 -m venv venv || python -m venv venv
-    if exist venv\Scripts\activate.bat (
-        call venv\Scripts\activate.bat
-    ) else (
-        echo [WARNING] Khong the tao venv tu dong. Dung python he thong.
-    )
+:: 1. Kiem tra Python
+python --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [ERROR] Khong tim thay Python! Vui long cai dat Python va add vao PATH.
+    pause
+    exit /b
 )
 
-echo.
-echo Dang cap nhat cac thu vien tu requirements.txt...
+:: 2. Tao thu muc venv neu chua co
+if not exist venv (
+    echo Dang tao moi truong ao venv...
+    python -m venv venv
+)
+
+:: 3. Kich hoat moi truong ao
+echo Dang kich hoat moi truong ao...
+call venv\Scripts\activate
+
+:: 4. Upgrade pip va cai dat dependencies
+echo Dang cap nhat pip va cai dat cac thu vien phu thuoc...
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-echo.
-echo ============================================================
-echo BIEN DICH THU VIEN DONG HOC C++...
-echo ============================================================
+:: 5. Bien dich module C++ kinematics
+echo Dang bien dich module dong hoc C++...
 python build_kinematics.py
 
-echo.
-echo ============================================================
-echo KHOI DONG PHAN MEM ROBOT HMI MOI...
-echo ============================================================
+:: 6. Chay ung dung
+echo Dang khoi chay ung dung...
 python main.py
 
-if %errorlevel% neq 0 (
-    echo.
-    echo Chuong trinh bi dung voi ma loi %errorlevel%. Nhan phim bat ky de thoat.
-    pause > nul
-)
+pause
