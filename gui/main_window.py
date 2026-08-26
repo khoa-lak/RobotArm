@@ -40,6 +40,13 @@ class MainWindow(ctk.CTk):
         # 3. Initialize 3D Viewer
         self.viewer = VTKViewer(self, self.config)
         
+        # State variables for Program Editor & Simulator
+        self.program_steps = []
+        self.simulating = False
+        self.executing_real = False
+        self.captured_joints = list(self.joint_angles)
+        self.captured_coords = self.kinematics.forward(self.joint_angles)
+        
         # 4. Construct Layout
         self._create_widgets()
         self._update_coordinates()
@@ -53,41 +60,49 @@ class MainWindow(ctk.CTk):
     def _create_widgets(self):
         import tkinter as tk
         
-        # Create PanedWindow for horizontal split
+        # Create PanedWindow for 3-horizontal splits
         self.main_pane = tk.PanedWindow(self, orient=tk.HORIZONTAL, bg="#1a1a1a", bd=0, sashwidth=6, sashpad=2, relief="flat")
         self.main_pane.pack(fill="both", expand=True)
         
-        # Left Panel (Control Panel)
+        # Left Panel (Program / Config Tabview)
         self.left_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
         self.left_panel.grid_columnconfigure(0, weight=1)
-        self.main_pane.add(self.left_panel, width=420, minsize=350)
+        self.main_pane.add(self.left_panel, width=380, minsize=300, stretch="never")
         
-        # Right Panel (3D Viewer Container)
+        # Middle Panel (3D Viewer Container)
+        self.middle_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
+        self.middle_panel.grid_columnconfigure(0, weight=1)
+        self.middle_panel.grid_rowconfigure(0, weight=1)
+        self.main_pane.add(self.middle_panel, minsize=400, stretch="always")
+        
+        # Right Panel (Jog / Connection Panel)
         self.right_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
         self.right_panel.grid_columnconfigure(0, weight=1)
-        self.right_panel.grid_rowconfigure(0, weight=1)
-        self.main_pane.add(self.right_panel, minsize=400)
+        self.main_pane.add(self.right_panel, width=380, minsize=300, stretch="never")
         
-        # Create Tabview inside left_panel
+        # Create Tabview inside left_panel (removed Control tab)
         self.tabview = ctk.CTkTabview(self.left_panel, corner_radius=10)
         self.tabview.pack(fill="both", expand=True, padx=5, pady=5)
         
-        self.tab_control = self.tabview.add("Control")
+        self.tab_program = self.tabview.add("Program")
         self.tab_config = self.tabview.add("Config")
         
-        self.tab_control.grid_columnconfigure(0, weight=1)
+        self.tab_program.grid_columnconfigure(0, weight=1)
         self.tab_config.grid_columnconfigure(0, weight=1)
         
-        # Create control elements inside the Control tab
+        # Create control elements directly inside the Right Panel
         self._create_connection_frame()
         self._create_coordinate_frame()
         self._create_jog_frame()
         
         # Create configuration elements inside the Config tab
         self._create_config_tab_widgets()
+        
+        # Create program editor elements inside the Program tab
+        self._create_program_tab_widgets()
 
     def _create_connection_frame(self):
-        conn_frame = ctk.CTkLabelFrame(self.tab_control, text="Serial Connection")
+        conn_frame = ctk.CTkLabelFrame(self.right_panel, text="Serial Connection")
         conn_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         conn_frame.grid_columnconfigure(0, weight=1)
         conn_frame.grid_columnconfigure(1, weight=1)
@@ -104,7 +119,7 @@ class MainWindow(ctk.CTk):
         self.connect_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
 
     def _create_jog_frame(self):
-        jog_frame = ctk.CTkLabelFrame(self.tab_control, text="Joint Jog Controls")
+        jog_frame = ctk.CTkLabelFrame(self.right_panel, text="Joint Jog Controls")
         jog_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
         jog_frame.grid_columnconfigure(0, weight=1)
         
@@ -147,7 +162,7 @@ class MainWindow(ctk.CTk):
         home_btn.grid(row=6, column=0, padx=10, pady=15, sticky="ew")
 
     def _create_coordinate_frame(self):
-        self.coord_frame = ctk.CTkLabelFrame(self.tab_control, text="Cartesian Position (TCP)")
+        self.coord_frame = ctk.CTkLabelFrame(self.right_panel, text="Cartesian Position (TCP)")
         self.coord_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         self.coord_frame.grid_columnconfigure((0, 1), weight=1)
         
@@ -204,13 +219,16 @@ class MainWindow(ctk.CTk):
             self.xyz_labels[axis].configure(text=f"{axis}: {val:.2f}{unit}")
 
     def _launch_viewer(self):
-        self.viewer.launch(self.right_panel)
+        self.viewer.launch(self.middle_panel)
         # Apply initial joint rotation values to the VTK assembly
         self.viewer.update_joints(self.joint_angles)
 
     def _on_serial_feedback(self, data):
         """Callback run when receiving feedback strings from the serial port."""
         print(f"[UI Serial Feedback]: {data}")
+        # If we are executing a program on the real robot and receive "done", trigger the next step
+        if self.executing_real and "done" in data.lower():
+            self.after(10, self._next_real_step)
 
     def _create_config_tab_widgets(self):
         # 1. DH Parameters grid frame
@@ -305,6 +323,335 @@ class MainWindow(ctk.CTk):
         self._update_coordinates()
         
         messagebox.showinfo("Success", "Configuration applied and saved successfully!")
+
+    def _create_program_tab_widgets(self):
+        import tkinter as tk
+        
+        # 1. Motion Step Frame
+        motion_frame = ctk.CTkLabelFrame(self.tab_program, text="Motion Step (MJ/ML)")
+        motion_frame.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
+        motion_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        self.move_type_var = ctk.StringVar(value="PTP (MJ)")
+        move_type_menu = ctk.CTkOptionMenu(motion_frame, values=["PTP (MJ)", "Linear (ML)"], variable=self.move_type_var)
+        move_type_menu.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        
+        capture_btn = ctk.CTkButton(motion_frame, text="Capture Pose", command=self._capture_current_pose)
+        capture_btn.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        self.captured_pose_lbl = ctk.CTkLabel(
+            motion_frame, 
+            text="Captured: J1=0.0°, J2=0.0°...\nXYZ: [267.0, -43.0, 412.0]", 
+            font=("Arial", 10),
+            justify="left"
+        )
+        self.captured_pose_lbl.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="w")
+        
+        # S, Ac, Dc inputs
+        inputs_frame = ctk.CTkFrame(motion_frame, fg_color="transparent")
+        inputs_frame.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        inputs_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        
+        ctk.CTkLabel(inputs_frame, text="Speed").grid(row=0, column=0)
+        self.sim_speed_entry = ctk.CTkEntry(inputs_frame, width=50, justify="center")
+        self.sim_speed_entry.insert(0, "50")
+        self.sim_speed_entry.grid(row=1, column=0, padx=2)
+        
+        ctk.CTkLabel(inputs_frame, text="Acc").grid(row=0, column=1)
+        self.sim_acc_entry = ctk.CTkEntry(inputs_frame, width=50, justify="center")
+        self.sim_acc_entry.insert(0, "50")
+        self.sim_acc_entry.grid(row=1, column=1, padx=2)
+        
+        ctk.CTkLabel(inputs_frame, text="Dec").grid(row=0, column=2)
+        self.sim_dec_entry = ctk.CTkEntry(inputs_frame, width=50, justify="center")
+        self.sim_dec_entry.insert(0, "50")
+        self.sim_dec_entry.grid(row=1, column=2, padx=2)
+        
+        add_motion_btn = ctk.CTkButton(motion_frame, text="Add Motion Step", command=self._add_motion_step)
+        add_motion_btn.grid(row=3, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        
+        # 2. Action Step Frame
+        action_frame = ctk.CTkLabelFrame(self.tab_program, text="Action/Wait Step")
+        action_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        action_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        self.action_type_var = ctk.StringVar(value="Gripper ON")
+        action_menu = ctk.CTkOptionMenu(
+            action_frame, 
+            values=["Gripper ON", "Gripper OFF", "Wait (Dừng chờ)"], 
+            variable=self.action_type_var
+        )
+        action_menu.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        
+        self.wait_time_entry = ctk.CTkEntry(action_frame, width=60, justify="center")
+        self.wait_time_entry.insert(0, "1.0")
+        self.wait_time_entry.grid(row=0, column=1, padx=5, pady=5)
+        
+        add_action_btn = ctk.CTkButton(action_frame, text="Add Action Step", command=self._add_action_step)
+        add_action_btn.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        
+        # 3. Program List Frame
+        sequence_frame = ctk.CTkLabelFrame(self.tab_program, text="Program Sequence")
+        sequence_frame.grid(row=2, column=0, padx=10, pady=5, sticky="nsew")
+        sequence_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        list_frame = ctk.CTkFrame(sequence_frame)
+        list_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        
+        self.step_listbox = tk.Listbox(
+            list_frame, 
+            height=5, 
+            bg="#2b2b2b", 
+            fg="white", 
+            selectbackground="#1F538D", 
+            selectforeground="white",
+            bd=0, 
+            highlightthickness=0, 
+            font=("Arial", 9)
+        )
+        self.step_listbox.pack(side="left", fill="both", expand=True)
+        
+        scrollbar = ctk.CTkScrollbar(list_frame, command=self.step_listbox.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.step_listbox.config(yscrollcommand=scrollbar.set)
+        
+        remove_btn = ctk.CTkButton(sequence_frame, text="Remove Selected", command=self._remove_selected_step)
+        remove_btn.grid(row=1, column=0, padx=3, pady=5, sticky="ew")
+        
+        clear_btn = ctk.CTkButton(sequence_frame, text="Clear All", fg_color="red", hover_color="#900", command=self._clear_program)
+        clear_btn.grid(row=1, column=1, padx=3, pady=5, sticky="ew")
+        
+        # 4. Sim & Real Controls Frame
+        ctrl_frame = ctk.CTkLabelFrame(self.tab_program, text="Simulate & Execute")
+        ctrl_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
+        ctrl_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        sim_btn = ctk.CTkButton(ctrl_frame, text="Run Simulation", command=self._start_simulation)
+        sim_btn.grid(row=0, column=0, padx=3, pady=5, sticky="ew")
+        
+        real_btn = ctk.CTkButton(ctrl_frame, text="Run Real Robot", fg_color="#1eaa59", hover_color="#13773e", command=self._start_real_execution)
+        real_btn.grid(row=0, column=1, padx=3, pady=5, sticky="ew")
+        
+        stop_btn = ctk.CTkButton(ctrl_frame, text="Stop Execution", fg_color="red", hover_color="#900", command=self._stop_execution)
+        stop_btn.grid(row=1, column=0, columnspan=2, padx=3, pady=5, sticky="ew")
+        
+        self.sim_status_lbl = ctk.CTkLabel(ctrl_frame, text="Mô phỏng: Sẵn sàng", text_color="gray", font=("Arial", 11, "bold"))
+        self.sim_status_lbl.grid(row=2, column=0, columnspan=2, padx=5, pady=2)
+
+    def _capture_current_pose(self):
+        self.captured_joints = list(self.joint_angles)
+        coords = self.kinematics.forward(self.captured_joints)
+        self.captured_coords = coords
+        self.captured_pose_lbl.configure(
+            text=f"Captured: J1={self.captured_joints[0]:.1f}°, J2={self.captured_joints[1]:.1f}°...\nXYZ: [{coords[0]:.1f}, {coords[1]:.1f}, {coords[2]:.1f}]"
+        )
+
+    def _add_motion_step(self):
+        m_type = self.move_type_var.get()
+        try:
+            speed = int(self.sim_speed_entry.get().strip())
+            acc = int(self.sim_acc_entry.get().strip())
+            dec = int(self.sim_dec_entry.get().strip())
+        except ValueError:
+            from tkinter import messagebox
+            messagebox.showerror("Error", "Tốc độ/Gia tốc/Giảm tốc phải là số nguyên!")
+            return
+            
+        step = {
+            "type": "motion",
+            "motion_type": "MJ" if "MJ" in m_type else "ML",
+            "joints": list(self.captured_joints),
+            "coords": list(self.captured_coords),
+            "speed": speed,
+            "acc": acc,
+            "dec": dec
+        }
+        self.program_steps.append(step)
+        display_text = f"[{len(self.program_steps)}] {step['motion_type']} -> X:{step['coords'][0]:.1f} Y:{step['coords'][1]:.1f} Z:{step['coords'][2]:.1f} (S:{speed})"
+        self.step_listbox.insert("end", display_text)
+
+    def _add_action_step(self):
+        act_type = self.action_type_var.get()
+        if "Wait" in act_type:
+            try:
+                val = float(self.wait_time_entry.get().strip())
+            except ValueError:
+                from tkinter import messagebox
+                messagebox.showerror("Error", "Thời gian chờ phải là số thực!")
+                return
+            step = {
+                "type": "wait",
+                "val": val
+            }
+            display_text = f"[{len(self.program_steps)+1}] WAIT -> {val:.1f} giây"
+        else:
+            action_code = "DO1on" if "ON" in act_type else "DO1off"
+            step = {
+                "type": "action",
+                "action_type": action_code
+            }
+            display_text = f"[{len(self.program_steps)+1}] GRIPPER -> {'ON (Đóng)' if 'ON' in act_type else 'OFF (Mở)'}"
+            
+        self.program_steps.append(step)
+        self.step_listbox.insert("end", display_text)
+
+    def _remove_selected_step(self):
+        try:
+            sel_idx = self.step_listbox.curselection()[0]
+            self.step_listbox.delete(sel_idx)
+            self.program_steps.pop(sel_idx)
+            # Rebuild display indexes
+            self.step_listbox.delete(0, "end")
+            for i, step in enumerate(self.program_steps):
+                if step["type"] == "motion":
+                    display_text = f"[{i+1}] {step['motion_type']} -> X:{step['coords'][0]:.1f} Y:{step['coords'][1]:.1f} Z:{step['coords'][2]:.1f} (S:{step['speed']})"
+                elif step["type"] == "wait":
+                    display_text = f"[{i+1}] WAIT -> {step['val']:.1f} giây"
+                else:
+                    display_text = f"[{i+1}] GRIPPER -> {'ON (Đóng)' if step['action_type'] == 'DO1on' else 'OFF (Mở)'}"
+                self.step_listbox.insert("end", display_text)
+        except IndexError:
+            pass
+
+    def _clear_program(self):
+        self.program_steps.clear()
+        self.step_listbox.delete(0, "end")
+
+    def _start_simulation(self):
+        if not self.program_steps:
+            from tkinter import messagebox
+            messagebox.showerror("Error", "Chương trình chưa có bước nào để mô phỏng!")
+            return
+            
+        self._stop_execution()
+        self.simulating = True
+        self.sim_step_idx = 0
+        self.sim_status_lbl.configure(text="Mô phỏng: Đang chạy...", text_color="orange")
+        self.start_sim_angles = list(self.joint_angles)
+        self._run_sim_step()
+
+    def _stop_execution(self):
+        self.simulating = False
+        self.executing_real = False
+        self.sim_status_lbl.configure(text="Mô phỏng: Đã dừng", text_color="gray")
+
+    def _run_sim_step(self):
+        if not self.simulating:
+            return
+            
+        if self.sim_step_idx >= len(self.program_steps):
+            self.simulating = False
+            self.sim_status_lbl.configure(text="Mô phỏng: Hoàn thành", text_color="green")
+            self._update_robot_pose(self.start_sim_angles)
+            from tkinter import messagebox
+            messagebox.showinfo("Simulation", "Mô phỏng hoàn thành thành công!")
+            return
+            
+        self.step_listbox.selection_clear(0, "end")
+        self.step_listbox.selection_set(self.sim_step_idx)
+        self.step_listbox.activate(self.sim_step_idx)
+        self.step_listbox.see(self.sim_step_idx)
+        
+        step = self.program_steps[self.sim_step_idx]
+        
+        if step["type"] == "motion":
+            target_joints = step["joints"]
+            self._interpolate_move(target_joints)
+        elif step["type"] == "wait":
+            duration = step["val"]
+            self.sim_status_lbl.configure(text=f"Mô phỏng: Chờ {duration:.1f}s...", text_color="cyan")
+            self.after(int(duration * 1000), self._next_sim_step)
+        elif step["type"] == "action":
+            action = step["action_type"]
+            self.sim_status_lbl.configure(text=f"Mô phỏng: Kẹp {'ON' if action == 'DO1on' else 'OFF'}...", text_color="magenta")
+            self.after(500, self._next_sim_step)
+
+    def _interpolate_move(self, target_joints):
+        start_joints = list(self.joint_angles)
+        frames = 20
+        step_sizes = [(target_joints[i] - start_joints[i]) / frames for i in range(6)]
+        
+        def step_fn(frame):
+            if not self.simulating:
+                return
+            if frame >= frames:
+                self._update_robot_pose(target_joints)
+                self._next_sim_step()
+            else:
+                current = [start_joints[i] + step_sizes[i] * frame for i in range(6)]
+                self._update_robot_pose(current)
+                self.after(20, step_fn, frame + 1)
+        step_fn(0)
+
+    def _update_robot_pose(self, angles):
+        self.joint_angles = list(angles)
+        for i in range(6):
+            self.sliders[i].set(angles[i])
+            self.angle_labels[i].configure(text=f"{angles[i]:.2f}°")
+        if self.viewer.vtk_running:
+            self.viewer.update_joints(self.joint_angles)
+        self._update_coordinates()
+
+    def _next_sim_step(self):
+        if self.simulating:
+            self.sim_step_idx += 1
+            self._run_sim_step()
+
+    def _start_real_execution(self):
+        if not self.serial.running:
+            from tkinter import messagebox
+            messagebox.showerror("Error", "Cánh tay robot chưa được kết nối! Vui lòng kết nối Serial trước.")
+            return
+        if not self.program_steps:
+            from tkinter import messagebox
+            messagebox.showerror("Error", "Chương trình chưa có bước nào để chạy!")
+            return
+            
+        self._stop_execution()
+        self.executing_real = True
+        self.real_step_idx = 0
+        self.sim_status_lbl.configure(text="Robot Thật: Đang chạy...", text_color="orange")
+        self._execute_real_step()
+
+    def _execute_real_step(self):
+        if not self.executing_real:
+            return
+            
+        if self.real_step_idx >= len(self.program_steps):
+            self.executing_real = False
+            self.sim_status_lbl.configure(text="Robot Thật: Hoàn thành", text_color="green")
+            from tkinter import messagebox
+            messagebox.showinfo("Execution", "Chạy chương trình trên robot thật hoàn thành!")
+            return
+            
+        self.step_listbox.selection_clear(0, "end")
+        self.step_listbox.selection_set(self.real_step_idx)
+        self.step_listbox.activate(self.real_step_idx)
+        self.step_listbox.see(self.real_step_idx)
+        
+        step = self.program_steps[self.real_step_idx]
+        
+        if step["type"] == "motion":
+            joints = step["joints"]
+            speed = step["speed"]
+            acc = step["acc"]
+            dec = step["dec"]
+            self._update_robot_pose(joints)
+            self.serial.send_move_command(joints, speed=speed, acc=acc, dec=dec)
+        elif step["type"] == "wait":
+            duration = step["val"]
+            self.sim_status_lbl.configure(text=f"Robot Thật: Chờ {duration:.1f}s...", text_color="cyan")
+            self.after(int(duration * 1000), self._next_real_step)
+        elif step["type"] == "action":
+            action = step["action_type"]
+            self.sim_status_lbl.configure(text=f"Robot Thật: Kích hoạt {action}...", text_color="magenta")
+            self.serial.send_command(action)
+            self.after(500, self._next_real_step)
+
+    def _next_real_step(self):
+        if self.executing_real:
+            self.real_step_idx += 1
+            self._execute_real_step()
 
     def _go_to_home(self):
         # 1. Reset state joint angles to 0.0

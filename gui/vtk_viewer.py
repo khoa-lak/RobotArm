@@ -133,8 +133,11 @@ class VTKViewer:
         
         # 5. Define Resize Event Handler
         def on_resize(event):
-            if event is not None and event.widget != parent_widget:
-                return
+            if event is not None:
+                canvas = getattr(parent_widget, '_canvas', None)
+                target = canvas if canvas is not None else parent_widget
+                if event.widget != target:
+                    return
             w = parent_widget.winfo_width()
             h = parent_widget.winfo_height()
             if self.vtk_running and self.render_window:
