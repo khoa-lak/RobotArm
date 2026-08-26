@@ -1,0 +1,10 @@
+customtkinter
+matplotlib
+vtk
+pyserial
+opencv-python
+opencv-contrib-python
+inputs
+pywin32; sys_platform == "win32"
+pygrabber; sys_platform == "win32"
+pybind11

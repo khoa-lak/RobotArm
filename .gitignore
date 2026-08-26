@@ -1,0 +1,27 @@
+﻿# Virtual Environment
+venv/
+.venv/
+env/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*.class
+*.pyd
+
+# Build & Compilation Artifacts
+build/
+dist/
+*.egg-info/
+*.obj
+*.exp
+*.lib
+*.pdb
+*.cmake
+CMakeFiles/
+CMakeCache.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
