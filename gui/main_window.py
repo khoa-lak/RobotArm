@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import customtkinter as ctk
 from serial.tools import list_ports
 
@@ -37,8 +38,11 @@ class MainWindow(ctk.CTk):
             float(self.config.get("J6AngCur", 0.0))
         ]
         
-        # 3. Initialize 3D Viewer
+        # 3. Initialize 3D Viewer & Custom Objects
         self.viewer = VTKViewer(self, self.config)
+        self.selected_obj_id = None
+        self._updating_obj_ui = False
+        self._load_saved_custom_objects()
         
         # State variables for Program Editor & Simulator
         self.program_steps = []
@@ -80,14 +84,16 @@ class MainWindow(ctk.CTk):
         self.right_panel.grid_columnconfigure(0, weight=1)
         self.main_pane.add(self.right_panel, width=380, minsize=300, stretch="never")
         
-        # Create Tabview inside left_panel (removed Control tab)
+        # Create Tabview inside left_panel
         self.tabview = ctk.CTkTabview(self.left_panel, corner_radius=10)
         self.tabview.pack(fill="both", expand=True, padx=5, pady=5)
         
         self.tab_program = self.tabview.add("Program")
+        self.tab_objects = self.tabview.add("Objects (STL)")
         self.tab_config = self.tabview.add("Config")
         
         self.tab_program.grid_columnconfigure(0, weight=1)
+        self.tab_objects.grid_columnconfigure(0, weight=1)
         self.tab_config.grid_columnconfigure(0, weight=1)
         
         # Create control elements directly inside the Right Panel
@@ -95,11 +101,14 @@ class MainWindow(ctk.CTk):
         self._create_coordinate_frame()
         self._create_jog_frame()
         
-        # Create configuration elements inside the Config tab
-        self._create_config_tab_widgets()
-        
         # Create program editor elements inside the Program tab
         self._create_program_tab_widgets()
+
+        # Create custom objects controls inside the Objects tab
+        self._create_objects_tab_widgets()
+
+        # Create configuration elements inside the Config tab
+        self._create_config_tab_widgets()
 
     def _create_connection_frame(self):
         conn_frame = ctk.CTkLabelFrame(self.right_panel, text="Serial Connection")
@@ -672,6 +681,614 @@ class MainWindow(ctk.CTk):
         
         # 5. Send serial updates
         self.serial.send_move_command(self.joint_angles)
+
+    # -------------------------------------------------------------------------
+    # Custom STL 3D Objects Management & UI (Quản lý vật thể 3D STL tùy chỉnh)
+    # -------------------------------------------------------------------------
+    def _load_saved_custom_objects(self):
+        """Loads saved custom STL objects configuration from ConfigManager."""
+        saved = self.config.get("custom_stl_objects", [])
+        if isinstance(saved, list):
+            for obj in saved:
+                if isinstance(obj, dict) and "id" in obj and "file_path" in obj:
+                    if os.path.exists(obj["file_path"]):
+                        self.viewer.add_custom_object(
+                            obj_id=obj["id"],
+                            file_path=obj["file_path"],
+                            name=obj.get("name"),
+                            position=obj.get("position", [0.0, 0.0, 0.0]),
+                            rotation=obj.get("rotation", [0.0, 0.0, 0.0]),
+                            scale=obj.get("scale", 1.0),
+                            color=obj.get("color", "LimeGreen"),
+                            opacity=obj.get("opacity", 1.0),
+                            parent=obj.get("parent", "World (Tọa độ thế giới)"),
+                            visible=obj.get("visible", True)
+                        )
+
+    def _save_custom_objects(self):
+        """Saves current custom STL objects configuration to ConfigManager."""
+        saved_list = []
+        for obj_id, obj in self.viewer.custom_objects.items():
+            saved_list.append({
+                "id": obj["id"],
+                "name": obj["name"],
+                "file_path": obj["file_path"],
+                "position": obj["position"],
+                "rotation": obj["rotation"],
+                "scale": obj["scale"],
+                "color": obj["color"],
+                "opacity": obj["opacity"],
+                "parent": obj["parent"],
+                "visible": obj["visible"]
+            })
+        self.config.set("custom_stl_objects", saved_list)
+
+    def _create_objects_tab_widgets(self):
+        """Constructs the UI for adding, inspecting, and manipulating custom STL objects."""
+        # Scrollable container for object controls
+        self.obj_scroll_frame = ctk.CTkScrollableFrame(self.tab_objects, fg_color="transparent")
+        self.obj_scroll_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.obj_scroll_frame.grid_columnconfigure(0, weight=1)
+
+        # 1. Add STL file button
+        add_btn = ctk.CTkButton(
+            self.obj_scroll_frame,
+            text="📁 Thêm file STL (Add STL File)",
+            font=("Arial", 13, "bold"),
+            height=38,
+            fg_color="#1f538d",
+            hover_color="#14375e",
+            command=self._on_add_stl_file
+        )
+        add_btn.grid(row=0, column=0, padx=5, pady=(5, 8), sticky="ew")
+
+        # 2. Selected Object Management Frame
+        sel_frame = ctk.CTkLabelFrame(self.obj_scroll_frame, text="Vật thể đang chọn (Selected Object)")
+        sel_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        sel_frame.grid_columnconfigure(0, weight=1)
+
+        # Object dropdown
+        self.obj_selector = ctk.CTkOptionMenu(
+            sel_frame,
+            values=["(Chưa có vật thể nào)"],
+            command=self._on_select_object
+        )
+        self.obj_selector.grid(row=0, column=0, columnspan=3, padx=8, pady=(8, 6), sticky="ew")
+
+        # Action buttons row
+        btn_frame = ctk.CTkFrame(sel_frame, fg_color="transparent")
+        btn_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=(0, 8), sticky="ew")
+        btn_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self.obj_vis_btn = ctk.CTkButton(
+            btn_frame,
+            text="👁️ Ẩn/Hiện",
+            width=70,
+            command=self._toggle_object_visibility
+        )
+        self.obj_vis_btn.grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+
+        self.obj_reset_btn = ctk.CTkButton(
+            btn_frame,
+            text="🔄 Đặt lại",
+            width=70,
+            command=self._reset_object_transform
+        )
+        self.obj_reset_btn.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+
+        self.obj_del_btn = ctk.CTkButton(
+            btn_frame,
+            text="🗑️ Xóa",
+            width=70,
+            fg_color="#c0392b",
+            hover_color="#962d22",
+            command=self._delete_object
+        )
+        self.obj_del_btn.grid(row=0, column=2, padx=2, pady=2, sticky="ew")
+
+        # 3. Position Controls Frame (X, Y, Z mm)
+        pos_frame = ctk.CTkLabelFrame(self.obj_scroll_frame, text="Điều chỉnh Tọa độ (Position - mm)")
+        pos_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
+        pos_frame.grid_columnconfigure(0, weight=1)
+
+        self.pos_sliders = {}
+        self.pos_entries = {}
+        
+        pos_axes = [
+            ("X", -1000.0, 1000.0),
+            ("Y", -1000.0, 1000.0),
+            ("Z", -500.0, 1500.0)
+        ]
+        
+        for idx, (axis, min_val, max_val) in enumerate(pos_axes):
+            axis_card = ctk.CTkFrame(pos_frame, fg_color="#2b2b2b", corner_radius=6)
+            axis_card.grid(row=idx, column=0, padx=6, pady=4, sticky="ew")
+            axis_card.grid_columnconfigure(1, weight=1)
+
+            # Header row: Axis label + Entry + Unit
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
+            lbl.grid(row=0, column=0, padx=(6, 2), pady=4, sticky="w")
+
+            entry = ctk.CTkEntry(axis_card, width=70, height=26, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.0")
+            entry.grid(row=0, column=1, padx=2, pady=4, sticky="w")
+            entry.bind("<Return>", lambda e: self._on_entry_update())
+            entry.bind("<FocusOut>", lambda e: self._on_entry_update())
+            self.pos_entries[axis] = entry
+
+            unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=4, sticky="w")
+
+            # Quick step buttons row inside header
+            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
+            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
+            
+            for step in [-10, -1, 1, 10]:
+                text = f"{step:+d}" if step > 0 else str(step)
+                btn = ctk.CTkButton(
+                    step_box,
+                    text=text,
+                    width=30,
+                    height=22,
+                    font=("Arial", 9),
+                    command=lambda a=axis, s=step: self._step_pos(a, s)
+                )
+                btn.pack(side="left", padx=1)
+
+            # Slider
+            slider = ctk.CTkSlider(
+                axis_card,
+                from_=min_val,
+                to=max_val,
+                height=16,
+                command=lambda val, a=axis: self._on_pos_slider_move(a, val)
+            )
+            slider.set(0.0)
+            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(2, 6), sticky="ew")
+            self.pos_sliders[axis] = slider
+
+        # 4. Rotation Controls Frame (Rx, Ry, Rz deg)
+        rot_frame = ctk.CTkLabelFrame(self.obj_scroll_frame, text="Điều chỉnh Góc quay (Rotation - độ °)")
+        rot_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
+        rot_frame.grid_columnconfigure(0, weight=1)
+
+        self.rot_sliders = {}
+        self.rot_entries = {}
+        
+        rot_axes = [
+            ("Rx", "Roll (X)"),
+            ("Ry", "Pitch (Y)"),
+            ("Rz", "Yaw (Z)")
+        ]
+        
+        for idx, (axis, name) in enumerate(rot_axes):
+            axis_card = ctk.CTkFrame(rot_frame, fg_color="#2b2b2b", corner_radius=6)
+            axis_card.grid(row=idx, column=0, padx=6, pady=4, sticky="ew")
+            axis_card.grid_columnconfigure(1, weight=1)
+
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
+            lbl.grid(row=0, column=0, padx=(6, 2), pady=4, sticky="w")
+
+            entry = ctk.CTkEntry(axis_card, width=70, height=26, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.0")
+            entry.grid(row=0, column=1, padx=2, pady=4, sticky="w")
+            entry.bind("<Return>", lambda e: self._on_entry_update())
+            entry.bind("<FocusOut>", lambda e: self._on_entry_update())
+            self.rot_entries[axis] = entry
+
+            unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 11, "bold"), text_color="gray")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=4, sticky="w")
+
+            # Quick step buttons row for rotation
+            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
+            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
+            
+            for step in [-15, -1, 1, 15]:
+                text = f"{step:+d}°" if step > 0 else f"{step}°"
+                btn = ctk.CTkButton(
+                    step_box,
+                    text=text,
+                    width=32,
+                    height=22,
+                    font=("Arial", 9),
+                    command=lambda a=axis, s=step: self._step_rot(a, s)
+                )
+                btn.pack(side="left", padx=1)
+
+            slider = ctk.CTkSlider(
+                axis_card,
+                from_=-180.0,
+                to=180.0,
+                height=16,
+                command=lambda val, a=axis: self._on_rot_slider_move(a, val)
+            )
+            slider.set(0.0)
+            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(2, 6), sticky="ew")
+            self.rot_sliders[axis] = slider
+
+        # 5. Attributes & Attachment Frame
+        attr_frame = ctk.CTkLabelFrame(self.obj_scroll_frame, text="Gắn kết & Hiển thị (Parent & Visuals)")
+        attr_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")
+        attr_frame.grid_columnconfigure(1, weight=1)
+
+        # Parent attachment option
+        ctk.CTkLabel(attr_frame, text="Gắn vào (Parent):", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=8, pady=5, sticky="w")
+        self.parent_menu = ctk.CTkOptionMenu(
+            attr_frame,
+            values=[
+                "World (Tọa độ thế giới)",
+                "End-Effector (Link 6 - Đầu kẹp)",
+                "Link 5",
+                "Link 4",
+                "Link 3",
+                "Link 2",
+                "Link 1",
+                "Base (Đế robot)"
+            ],
+            command=self._on_parent_change
+        )
+        self.parent_menu.grid(row=0, column=1, padx=8, pady=5, sticky="ew")
+
+        # Color dropdown
+        ctk.CTkLabel(attr_frame, text="Màu sắc (Color):", font=("Arial", 11, "bold")).grid(row=1, column=0, padx=8, pady=5, sticky="w")
+        self.color_menu = ctk.CTkOptionMenu(
+            attr_frame,
+            values=[
+                "LimeGreen",
+                "Crimson",
+                "DeepSkyBlue",
+                "Gold",
+                "OrangeRed",
+                "MediumOrchid",
+                "Silver",
+                "DarkOrange",
+                "Cyan",
+                "White",
+                "DimGray"
+            ],
+            command=self._on_color_change
+        )
+        self.color_menu.grid(row=1, column=1, padx=8, pady=5, sticky="ew")
+
+        # Scale slider
+        ctk.CTkLabel(attr_frame, text="Tỉ lệ (Scale):", font=("Arial", 11, "bold")).grid(row=2, column=0, padx=8, pady=5, sticky="w")
+        scale_box = ctk.CTkFrame(attr_frame, fg_color="transparent")
+        scale_box.grid(row=2, column=1, padx=8, pady=5, sticky="ew")
+        scale_box.grid_columnconfigure(0, weight=1)
+        
+        self.scale_slider = ctk.CTkSlider(
+            scale_box,
+            from_=0.1,
+            to=5.0,
+            height=16,
+            command=self._on_scale_slider_move
+        )
+        self.scale_slider.set(1.0)
+        self.scale_slider.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        
+        self.scale_lbl = ctk.CTkLabel(scale_box, text="1.00x", width=45, font=("Arial", 11, "bold"))
+        self.scale_lbl.grid(row=0, column=1, sticky="e")
+
+        # Opacity slider
+        ctk.CTkLabel(attr_frame, text="Độ trong suốt:", font=("Arial", 11, "bold")).grid(row=3, column=0, padx=8, pady=(5, 8), sticky="w")
+        opacity_box = ctk.CTkFrame(attr_frame, fg_color="transparent")
+        opacity_box.grid(row=3, column=1, padx=8, pady=(5, 8), sticky="ew")
+        opacity_box.grid_columnconfigure(0, weight=1)
+        
+        self.opacity_slider = ctk.CTkSlider(
+            opacity_box,
+            from_=0.1,
+            to=1.0,
+            height=16,
+            command=self._on_opacity_slider_move
+        )
+        self.opacity_slider.set(1.0)
+        self.opacity_slider.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        
+        self.opacity_lbl = ctk.CTkLabel(opacity_box, text="100%", width=45, font=("Arial", 11, "bold"))
+        self.opacity_lbl.grid(row=0, column=1, sticky="e")
+
+        # Refresh UI state with any loaded objects
+        self._refresh_objects_list_ui()
+
+    def _refresh_objects_list_ui(self):
+        """Updates the dropdown and loads currently selected object details."""
+        if not self.viewer.custom_objects:
+            self.obj_selector.configure(values=["(Chưa có vật thể nào)"])
+            self.obj_selector.set("(Chưa có vật thể nào)")
+            self.selected_obj_id = None
+            self._updating_obj_ui = True
+            for axis in ["X", "Y", "Z"]:
+                self.pos_entries[axis].delete(0, "end")
+                self.pos_entries[axis].insert(0, "0.0")
+                self.pos_sliders[axis].set(0.0)
+            for axis in ["Rx", "Ry", "Rz"]:
+                self.rot_entries[axis].delete(0, "end")
+                self.rot_entries[axis].insert(0, "0.0")
+                self.rot_sliders[axis].set(0.0)
+            self.scale_slider.set(1.0)
+            self.scale_lbl.configure(text="1.00x")
+            self.opacity_slider.set(1.0)
+            self.opacity_lbl.configure(text="100%")
+            self._updating_obj_ui = False
+            return
+
+        names = [obj["name"] for obj in self.viewer.custom_objects.values()]
+        self.obj_selector.configure(values=names)
+
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            self.selected_obj_id = list(self.viewer.custom_objects.keys())[0]
+
+        selected_name = self.viewer.custom_objects[self.selected_obj_id]["name"]
+        self.obj_selector.set(selected_name)
+        self._load_selected_obj_to_ui()
+
+    def _on_select_object(self, selected_name):
+        """Callback when an object is chosen in the dropdown."""
+        for obj_id, obj in self.viewer.custom_objects.items():
+            if obj["name"] == selected_name:
+                self.selected_obj_id = obj_id
+                self._load_selected_obj_to_ui()
+                break
+
+    def _load_selected_obj_to_ui(self):
+        """Populates sliders, entries, and visual dropdowns with the selected object's data."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+
+        obj = self.viewer.custom_objects[self.selected_obj_id]
+        self._updating_obj_ui = True
+
+        pos = obj.get("position", [0.0, 0.0, 0.0])
+        for idx, axis in enumerate(["X", "Y", "Z"]):
+            val = pos[idx]
+            self.pos_entries[axis].delete(0, "end")
+            self.pos_entries[axis].insert(0, f"{val:.2f}")
+            if axis in ["X", "Y"]:
+                self.pos_sliders[axis].set(max(-1000.0, min(1000.0, val)))
+            else:
+                self.pos_sliders[axis].set(max(-500.0, min(1500.0, val)))
+
+        rot = obj.get("rotation", [0.0, 0.0, 0.0])
+        for idx, axis in enumerate(["Rx", "Ry", "Rz"]):
+            val = rot[idx]
+            self.rot_entries[axis].delete(0, "end")
+            self.rot_entries[axis].insert(0, f"{val:.2f}")
+            self.rot_sliders[axis].set(max(-180.0, min(180.0, val)))
+
+        scale = obj.get("scale", 1.0)
+        self.scale_slider.set(scale)
+        self.scale_lbl.configure(text=f"{scale:.2f}x")
+
+        opacity = obj.get("opacity", 1.0)
+        self.opacity_slider.set(opacity)
+        self.opacity_lbl.configure(text=f"{int(opacity*100)}%")
+
+        color = obj.get("color", "LimeGreen")
+        self.color_menu.set(color)
+
+        parent = obj.get("parent", "World (Tọa độ thế giới)")
+        self.parent_menu.set(parent)
+
+        vis = obj.get("visible", True)
+        self.obj_vis_btn.configure(text="👁️ Ẩn" if vis else "👁️ Hiện")
+
+        self._updating_obj_ui = False
+
+    def _on_add_stl_file(self):
+        """Opens file dialog to browse for an STL file and adds it to the scene."""
+        from tkinter import filedialog, messagebox
+        file_path = filedialog.askopenfilename(
+            title="Chọn file STL 3D",
+            filetypes=[("STL 3D Model", "*.stl *.STL"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        if not os.path.exists(file_path):
+            messagebox.showerror("Lỗi", f"Không tìm thấy file: {file_path}")
+            return
+
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        existing_names = [obj.get("name") for obj in self.viewer.custom_objects.values()]
+        unique_name = base_name
+        counter = 1
+        while unique_name in existing_names:
+            unique_name = f"{base_name}_{counter}"
+            counter += 1
+
+        obj_id = f"stl_{int(time.time()*1000)}"
+        self.viewer.add_custom_object(
+            obj_id=obj_id,
+            file_path=file_path,
+            name=unique_name,
+            position=[0.0, 0.0, 0.0],
+            rotation=[0.0, 0.0, 0.0],
+            scale=1.0,
+            color="LimeGreen",
+            opacity=1.0,
+            parent="World (Tọa độ thế giới)",
+            visible=True
+        )
+        self.selected_obj_id = obj_id
+        self._save_custom_objects()
+        self._refresh_objects_list_ui()
+
+    def _on_pos_slider_move(self, axis, val):
+        """Callback when position slider moves."""
+        if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        obj = self.viewer.custom_objects[self.selected_obj_id]
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
+        pos = list(obj["position"])
+        pos[axis_idx] = float(val)
+
+        self._updating_obj_ui = True
+        self.pos_entries[axis].delete(0, "end")
+        self.pos_entries[axis].insert(0, f"{val:.2f}")
+        self._updating_obj_ui = False
+
+        self.viewer.update_custom_object(self.selected_obj_id, position=pos)
+        self._save_custom_objects()
+
+    def _on_rot_slider_move(self, axis, val):
+        """Callback when rotation slider moves."""
+        if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        obj = self.viewer.custom_objects[self.selected_obj_id]
+        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
+        rot = list(obj["rotation"])
+        rot[axis_idx] = float(val)
+
+        self._updating_obj_ui = True
+        self.rot_entries[axis].delete(0, "end")
+        self.rot_entries[axis].insert(0, f"{val:.2f}")
+        self._updating_obj_ui = False
+
+        self.viewer.update_custom_object(self.selected_obj_id, rotation=rot)
+        self._save_custom_objects()
+
+    def _on_entry_update(self):
+        """Callback when user edits numeric entries and presses Enter or leaves focus."""
+        if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        try:
+            x = float(self.pos_entries["X"].get().strip())
+            y = float(self.pos_entries["Y"].get().strip())
+            z = float(self.pos_entries["Z"].get().strip())
+            rx = float(self.rot_entries["Rx"].get().strip())
+            ry = float(self.rot_entries["Ry"].get().strip())
+            rz = float(self.rot_entries["Rz"].get().strip())
+        except ValueError:
+            return
+
+        self._updating_obj_ui = True
+        self.pos_sliders["X"].set(max(-1000.0, min(1000.0, x)))
+        self.pos_sliders["Y"].set(max(-1000.0, min(1000.0, y)))
+        self.pos_sliders["Z"].set(max(-500.0, min(1500.0, z)))
+        self.rot_sliders["Rx"].set(max(-180.0, min(180.0, rx)))
+        self.rot_sliders["Ry"].set(max(-180.0, min(180.0, ry)))
+        self.rot_sliders["Rz"].set(max(-180.0, min(180.0, rz)))
+        self._updating_obj_ui = False
+
+        self.viewer.update_custom_object(
+            self.selected_obj_id,
+            position=[x, y, z],
+            rotation=[rx, ry, rz]
+        )
+        self._save_custom_objects()
+
+    def _step_pos(self, axis, delta):
+        """Steps position by a fixed offset (+10, +1, -1, -10)."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        obj = self.viewer.custom_objects[self.selected_obj_id]
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
+        pos = list(obj["position"])
+        pos[axis_idx] += float(delta)
+
+        self._updating_obj_ui = True
+        self.pos_entries[axis].delete(0, "end")
+        self.pos_entries[axis].insert(0, f"{pos[axis_idx]:.2f}")
+        if axis in ["X", "Y"]:
+            self.pos_sliders[axis].set(max(-1000.0, min(1000.0, pos[axis_idx])))
+        else:
+            self.pos_sliders[axis].set(max(-500.0, min(1500.0, pos[axis_idx])))
+        self._updating_obj_ui = False
+
+        self.viewer.update_custom_object(self.selected_obj_id, position=pos)
+        self._save_custom_objects()
+
+    def _step_rot(self, axis, delta):
+        """Steps rotation angle by a fixed step."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        obj = self.viewer.custom_objects[self.selected_obj_id]
+        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
+        rot = list(obj["rotation"])
+        new_val = rot[axis_idx] + float(delta)
+        while new_val > 180.0:
+            new_val -= 360.0
+        while new_val < -180.0:
+            new_val += 360.0
+        rot[axis_idx] = new_val
+
+        self._updating_obj_ui = True
+        self.rot_entries[axis].delete(0, "end")
+        self.rot_entries[axis].insert(0, f"{new_val:.2f}")
+        self.rot_sliders[axis].set(new_val)
+        self._updating_obj_ui = False
+
+        self.viewer.update_custom_object(self.selected_obj_id, rotation=rot)
+        self._save_custom_objects()
+
+    def _on_parent_change(self, parent_val):
+        """Callback when parent attachment dropdown changes."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        self.viewer.update_custom_object(self.selected_obj_id, parent=parent_val)
+        self._save_custom_objects()
+
+    def _on_color_change(self, color_val):
+        """Callback when color dropdown changes."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        self.viewer.update_custom_object(self.selected_obj_id, color=color_val)
+        self._save_custom_objects()
+
+    def _on_scale_slider_move(self, val):
+        """Callback when scale slider moves."""
+        if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        scale_val = float(val)
+        self.scale_lbl.configure(text=f"{scale_val:.2f}x")
+        self.viewer.update_custom_object(self.selected_obj_id, scale=scale_val)
+        self._save_custom_objects()
+
+    def _on_opacity_slider_move(self, val):
+        """Callback when opacity slider moves."""
+        if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        op_val = float(val)
+        self.opacity_lbl.configure(text=f"{int(op_val*100)}%")
+        self.viewer.update_custom_object(self.selected_obj_id, opacity=op_val)
+        self._save_custom_objects()
+
+    def _toggle_object_visibility(self):
+        """Toggles the visibility of the selected object."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        obj = self.viewer.custom_objects[self.selected_obj_id]
+        cur_vis = obj.get("visible", True)
+        new_vis = not cur_vis
+        self.viewer.update_custom_object(self.selected_obj_id, visible=new_vis)
+        self.obj_vis_btn.configure(text="👁️ Ẩn" if new_vis else "👁️ Hiện")
+        self._save_custom_objects()
+
+    def _reset_object_transform(self):
+        """Resets the position and rotation of the selected object to (0,0,0)."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        self.viewer.update_custom_object(
+            self.selected_obj_id,
+            position=[0.0, 0.0, 0.0],
+            rotation=[0.0, 0.0, 0.0],
+            scale=1.0
+        )
+        self._load_selected_obj_to_ui()
+        self._save_custom_objects()
+
+    def _delete_object(self):
+        """Deletes the selected object after user confirmation."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        from tkinter import messagebox
+        obj_name = self.viewer.custom_objects[self.selected_obj_id].get("name", "vật thể")
+        if messagebox.askyesno("Xác nhận xóa", f"Bạn có chắc muốn xóa vật thể '{obj_name}' khỏi không gian 3D?"):
+            self.viewer.remove_custom_object(self.selected_obj_id)
+            self.selected_obj_id = None
+            self._save_custom_objects()
+            self._refresh_objects_list_ui()
 
     def on_closing(self):
         # Graceful cleanup

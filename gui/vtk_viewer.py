@@ -18,6 +18,7 @@ class VTKViewer:
         self.base_transforms = {}
         self.joint_transforms = {}
         self.composite_transforms = {}
+        self.custom_objects = {}
         
         # Color Map matching standard AR4 look
         self.color_map = {
@@ -71,6 +72,7 @@ class VTKViewer:
         
         self._build_robot_actors()
         self._add_floor_grid()
+        self.rebuild_custom_objects()
         
         # Configure initial camera view
         camera = self.renderer.GetActiveCamera()
@@ -210,6 +212,7 @@ class VTKViewer:
         
         # 4. Rebuild robot actors and add them
         self._build_robot_actors()
+        self.rebuild_custom_objects()
         
         # 5. Apply current joint rotation values
         self.update_joints(self.root.joint_angles)
@@ -344,3 +347,235 @@ class VTKViewer:
         actor.GetProperty().SetOpacity(0.5)
         
         self.renderer.AddActor(actor)
+
+    # ---------------------------------------------------------
+    # Custom STL Objects Management (Tùy chỉnh vật thể 3D STL)
+    # ---------------------------------------------------------
+    def add_custom_object(self, obj_id, file_path, name=None, position=None, rotation=None, scale=1.0, color="LimeGreen", opacity=1.0, parent="World", visible=True):
+        """Adds a custom STL object to the scene."""
+        if position is None:
+            position = [0.0, 0.0, 0.0]
+        if rotation is None:
+            rotation = [0.0, 0.0, 0.0]
+            
+        obj_data = {
+            "id": obj_id,
+            "name": name if name else os.path.basename(file_path),
+            "file_path": file_path,
+            "position": [float(p) for p in position],
+            "rotation": [float(r) for r in rotation],
+            "scale": float(scale),
+            "color": color,
+            "opacity": float(opacity),
+            "parent": parent,
+            "visible": bool(visible),
+            "actor": None,
+            "transform": None
+        }
+        
+        self.custom_objects[obj_id] = obj_data
+        
+        if self.vtk_running and self.renderer:
+            self._create_custom_actor(obj_id)
+            if self.render_window:
+                self.render_window.Render()
+        return True
+
+    def _create_custom_actor(self, obj_id):
+        """Creates or recreates the VTK pipeline for a custom STL object."""
+        if obj_id not in self.custom_objects:
+            return
+        
+        obj = self.custom_objects[obj_id]
+        file_path = obj["file_path"]
+        
+        if not os.path.exists(file_path):
+            print(f"[WARNING] Custom STL not found: {file_path}")
+            return
+            
+        try:
+            reader = vtk.vtkSTLReader()
+            reader.SetFileName(file_path)
+            reader.Update()
+            
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(reader.GetOutputPort())
+            
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            
+            # Setup transform
+            transform = vtk.vtkTransform()
+            actor.SetUserTransform(transform)
+            
+            obj["actor"] = actor
+            obj["transform"] = transform
+            
+            self._apply_custom_object_appearance(obj_id)
+            self._apply_custom_object_transform(obj_id)
+            self._attach_custom_actor(obj_id)
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to load custom STL {file_path}: {e}")
+
+    def _attach_custom_actor(self, obj_id):
+        """Attaches the custom actor to either the renderer (World) or a robot link assembly."""
+        if obj_id not in self.custom_objects:
+            return
+        obj = self.custom_objects[obj_id]
+        actor = obj.get("actor")
+        if not actor or not self.renderer:
+            return
+            
+        parent = obj.get("parent", "World")
+        
+        # Detach first from wherever it might be
+        self.renderer.RemoveActor(actor)
+        for asm in self.assemblies.values():
+            try:
+                asm.RemovePart(actor)
+            except Exception:
+                pass
+                
+        # Attach to target
+        if parent == "World" or not parent:
+            self.renderer.AddActor(actor)
+        else:
+            # Map friendly parent name to assembly key
+            target_key = parent
+            if "Link 6-2" in parent or "End-Effector" in parent or "Đầu kẹp" in parent or "Link 6 (End-Effector)" in parent:
+                target_key = "Link 6-2.STL"
+            elif "Link 6-1" in parent:
+                target_key = "Link 6-1.STL"
+            elif "Link 5" in parent:
+                target_key = "Link 5-2.STL"
+            elif "Link 4" in parent:
+                target_key = "Link 4-3.STL"
+            elif "Link 3" in parent:
+                target_key = "Link 3-2.STL"
+            elif "Link 2" in parent:
+                target_key = "Link 2-3.STL"
+            elif "Link 1" in parent:
+                target_key = "Link 1-2.STL"
+            elif "Base" in parent:
+                target_key = "Link Base-3.STL"
+                
+            if target_key in self.assemblies:
+                self.assemblies[target_key].AddPart(actor)
+            else:
+                # Fallback to world
+                self.renderer.AddActor(actor)
+
+    def _apply_custom_object_transform(self, obj_id):
+        """Updates the vtkTransform for a custom object based on position, rotation, scale."""
+        if obj_id not in self.custom_objects:
+            return
+        obj = self.custom_objects[obj_id]
+        transform = obj.get("transform")
+        if not transform:
+            return
+            
+        pos = obj.get("position", [0.0, 0.0, 0.0])
+        rot = obj.get("rotation", [0.0, 0.0, 0.0])
+        scale = obj.get("scale", 1.0)
+        
+        transform.Identity()
+        transform.Translate(pos[0], pos[1], pos[2])
+        transform.RotateZ(rot[2])
+        transform.RotateY(rot[1])
+        transform.RotateX(rot[0])
+        transform.Scale(scale, scale, scale)
+
+    def _apply_custom_object_appearance(self, obj_id):
+        """Sets color, opacity, visibility."""
+        if obj_id not in self.custom_objects:
+            return
+        obj = self.custom_objects[obj_id]
+        actor = obj.get("actor")
+        if not actor:
+            return
+            
+        color = obj.get("color", "LimeGreen")
+        opacity = obj.get("opacity", 1.0)
+        visible = obj.get("visible", True)
+        
+        actor.SetVisibility(1 if visible else 0)
+        actor.GetProperty().SetOpacity(float(opacity))
+        
+        colors = vtk.vtkNamedColors()
+        if isinstance(color, str):
+            try:
+                actor.GetProperty().SetColor(colors.GetColor3d(color))
+            except Exception:
+                actor.GetProperty().SetColor(0.2, 0.8, 0.2)
+        elif isinstance(color, (list, tuple)) and len(color) == 3:
+            actor.GetProperty().SetColor(*color)
+
+    def update_custom_object(self, obj_id, position=None, rotation=None, scale=None, color=None, opacity=None, parent=None, visible=None, name=None):
+        """Updates properties of a custom STL object and renders changes."""
+        if obj_id not in self.custom_objects:
+            return False
+            
+        obj = self.custom_objects[obj_id]
+        
+        if position is not None:
+            obj["position"] = [float(p) for p in position]
+        if rotation is not None:
+            obj["rotation"] = [float(r) for r in rotation]
+        if scale is not None:
+            obj["scale"] = float(scale)
+        if color is not None:
+            obj["color"] = color
+        if opacity is not None:
+            obj["opacity"] = float(opacity)
+        if visible is not None:
+            obj["visible"] = bool(visible)
+        if name is not None:
+            obj["name"] = name
+            
+        parent_changed = False
+        if parent is not None and parent != obj.get("parent"):
+            obj["parent"] = parent
+            parent_changed = True
+            
+        if self.vtk_running:
+            if obj.get("actor") is None:
+                self._create_custom_actor(obj_id)
+            else:
+                self._apply_custom_object_appearance(obj_id)
+                self._apply_custom_object_transform(obj_id)
+                if parent_changed:
+                    self._attach_custom_actor(obj_id)
+            if self.render_window:
+                self.render_window.Render()
+        return True
+
+    def remove_custom_object(self, obj_id):
+        """Removes a custom object from the scene and data store."""
+        if obj_id not in self.custom_objects:
+            return False
+            
+        obj = self.custom_objects.pop(obj_id)
+        actor = obj.get("actor")
+        if actor and self.renderer:
+            self.renderer.RemoveActor(actor)
+            for asm in self.assemblies.values():
+                try:
+                    asm.RemovePart(actor)
+                except Exception:
+                    pass
+            if self.render_window:
+                self.render_window.Render()
+        return True
+
+    def clear_custom_objects(self):
+        """Removes all custom objects."""
+        for obj_id in list(self.custom_objects.keys()):
+            self.remove_custom_object(obj_id)
+
+    def rebuild_custom_objects(self):
+        """Re-initializes all custom STL objects in the VTK scene."""
+        if not self.vtk_running or not self.renderer:
+            return
+        for obj_id in list(self.custom_objects.keys()):
+            self._create_custom_actor(obj_id)

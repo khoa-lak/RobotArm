@@ -13,11 +13,11 @@
     "J6NegLim": "180",
     "J7PosLim": 500.0,
     "J1AngCur": "0.0000",
-    "J2AngCur": "0.0000",
+    "J2AngCur": "-35.4000",
     "J3AngCur": "0.0000",
     "J4AngCur": "0.0000",
     "J5AngCur": "0.0000",
-    "J6AngCur": "0.0000",
+    "J6AngCur": "-157.5000",
     "XcurPos": "267.292",
     "YcurPos": "-43.402",
     "ZcurPos": "412.343",
@@ -193,5 +193,6 @@
     "J7CalStatVal2": 0,
     "J8CalStatVal2": 0,
     "J9CalStatVal2": 0,
-    "setColor": "RoyalBlue"
+    "setColor": "RoyalBlue",
+    "custom_stl_objects": []
 }
