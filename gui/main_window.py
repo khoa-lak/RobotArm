@@ -730,27 +730,118 @@ class MainWindow(ctk.CTk):
         self.links_scroll_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.links_scroll_frame.grid_columnconfigure(0, weight=1)
 
-        # 1. Preset Selector Frame
-        preset_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Robot Preset (Mẫu Robot)")
+        # 1. Robot Model Profile Manager
+        preset_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="🤖 Hồ Sơ Mô Hình Robot (Robot Model Profiles)")
         preset_frame.grid(row=0, column=0, padx=5, pady=(2, 6), sticky="ew")
         preset_frame.grid_columnconfigure(0, weight=1)
-        preset_frame.grid_columnconfigure(1, weight=0)
 
-        presets = list(self.config.get_presets().keys())
+        # Current active model label
+        active_name = self.config.get_active_model_name()
+        self.active_model_lbl = ctk.CTkLabel(
+            preset_frame,
+            text=f"Đang dùng: {active_name}",
+            font=("Arial", 11, "bold"),
+            text_color="#3B8ED0",
+            anchor="w"
+        )
+        self.active_model_lbl.grid(row=0, column=0, padx=8, pady=(8, 2), sticky="ew")
+
+        # Model selector dropdown
+        model_names = list(self.config.get_saved_models().keys())
         self.preset_menu = ctk.CTkOptionMenu(
             preset_frame,
-            values=presets,
-            command=self._on_preset_selected
+            values=model_names if model_names else ["(Chưa có model)"],
+            command=lambda v: None
         )
-        self.preset_menu.grid(row=0, column=0, padx=6, pady=6, sticky="ew")
+        self.preset_menu.set(active_name)
+        self.preset_menu.grid(row=1, column=0, padx=6, pady=(2, 4), sticky="ew")
 
-        load_preset_btn = ctk.CTkButton(
-            preset_frame,
-            text="Nạp Preset",
-            width=80,
-            command=lambda: self._on_preset_selected(self.preset_menu.get())
+        # Row of action buttons
+        model_btn_row = ctk.CTkFrame(preset_frame, fg_color="transparent")
+        model_btn_row.grid(row=2, column=0, padx=6, pady=(0, 4), sticky="ew")
+        model_btn_row.grid_columnconfigure((0, 1), weight=1)
+
+        load_btn = ctk.CTkButton(
+            model_btn_row,
+            text="📂 Mở Model",
+            height=30,
+            fg_color="#1f538d",
+            hover_color="#14375e",
+            command=self._on_load_model
         )
-        load_preset_btn.grid(row=0, column=1, padx=(0, 6), pady=6)
+        load_btn.grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+
+        new_btn = ctk.CTkButton(
+            model_btn_row,
+            text="✚ Model Mới",
+            height=30,
+            fg_color="#4a7d45",
+            hover_color="#2e5c2a",
+            command=self._on_new_model
+        )
+        new_btn.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+
+        delete_btn = ctk.CTkButton(
+            model_btn_row,
+            text="🗑 Xóa Model",
+            height=30,
+            fg_color="#8d1f1f",
+            hover_color="#5e1414",
+            command=self._on_delete_model
+        )
+        delete_btn.grid(row=0, column=2, padx=2, pady=2, sticky="ew")
+        model_btn_row.grid_columnconfigure((0, 1, 2), weight=1)
+
+        # Save As new model
+        save_as_row = ctk.CTkFrame(preset_frame, fg_color="transparent")
+        save_as_row.grid(row=3, column=0, padx=6, pady=(0, 4), sticky="ew")
+        save_as_row.grid_columnconfigure(0, weight=1)
+        save_as_row.grid_columnconfigure(1, weight=0)
+
+        self.save_model_name_entry = ctk.CTkEntry(
+            save_as_row,
+            placeholder_text="Tên model mới...",
+            height=30
+        )
+        self.save_model_name_entry.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+
+        save_as_btn = ctk.CTkButton(
+            save_as_row,
+            text="💾 Lưu Mới",
+            height=30,
+            width=80,
+            fg_color="#1eaa59",
+            hover_color="#13773e",
+            command=self._on_save_model_as
+        )
+        save_as_btn.grid(row=0, column=1, sticky="ew")
+
+        # Export / Import row
+        io_row = ctk.CTkFrame(preset_frame, fg_color="transparent")
+        io_row.grid(row=4, column=0, padx=6, pady=(0, 8), sticky="ew")
+        io_row.grid_columnconfigure((0, 1), weight=1)
+
+        export_btn = ctk.CTkButton(
+            io_row,
+            text="⬆ Xuất JSON",
+            height=28,
+            fg_color="#555",
+            hover_color="#333",
+            font=("Arial", 11),
+            command=self._on_export_model
+        )
+        export_btn.grid(row=0, column=0, padx=2, sticky="ew")
+
+        import_btn = ctk.CTkButton(
+            io_row,
+            text="⬇ Nhập JSON",
+            height=28,
+            fg_color="#555",
+            hover_color="#333",
+            font=("Arial", 11),
+            command=self._on_import_model
+        )
+        import_btn.grid(row=0, column=1, padx=2, sticky="ew")
 
         # 2. Selected Link Selection Frame
         link_sel_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Khâu / Khớp Đang Chọn (Selected Link)")
@@ -1180,22 +1271,194 @@ class MainWindow(ctk.CTk):
         self.viewer.reset_link_transform(self.selected_link_key)
         self._load_selected_link_to_ui()
 
-    def _on_preset_selected(self, preset_name):
-        """Applies a built-in robot preset."""
+    # --- Robot Model Profile Management ---
+
+    def _refresh_model_list_ui(self):
+        """Refreshes model dropdown list and active model label."""
+        model_names = list(self.config.get_saved_models().keys())
+        active = self.config.get_active_model_name()
+        if hasattr(self, "preset_menu"):
+            self.preset_menu.configure(values=model_names)
+            self.preset_menu.set(active)
+        if hasattr(self, "config_preset_menu"):
+            self.config_preset_menu.configure(values=model_names)
+            self.config_preset_menu.set(active)
+        if hasattr(self, "active_model_lbl"):
+            self.active_model_lbl.configure(text=f"Đang dùng: {active}")
+
+    def _on_new_model(self):
+        """Creates a blank new robot model: clears 3D scene and resets all 7 link STL slots."""
+        from tkinter import messagebox, simpledialog
+        
+        name = simpledialog.askstring(
+            "Tạo Model Mới",
+            "Nhập tên model mới:\n(Sẽ xóa sạch toàn bộ STL hiện tại trong 3D viewer)",
+            initialvalue="Robot Model Mới"
+        )
+        if not name or not name.strip():
+            return
+        name = name.strip()
+
+        # Build blank 7-link template — no STL files, all offsets zero
+        blank_links = {
+            "Base":   {"name": "Base (Khớp đế)", "stl_files": [],
+                       "offset_pos": [0.0, 0.0, 0.0], "offset_rot": [0.0, 0.0, 0.0],
+                       "joint_axis": "None", "color": "Silver", "scale": 1.0, "opacity": 1.0},
+            "Link 1": {"name": "Khớp 1 (J1)", "stl_files": [],
+                       "offset_pos": [0.0, 0.0, 0.0], "offset_rot": [0.0, 0.0, 0.0],
+                       "joint_axis": "+Z", "color": "Silver", "scale": 1.0, "opacity": 1.0},
+            "Link 2": {"name": "Khớp 2 (J2)", "stl_files": [],
+                       "offset_pos": [0.0, 0.0, 0.0], "offset_rot": [0.0, 0.0, 0.0],
+                       "joint_axis": "+Z", "color": "Silver", "scale": 1.0, "opacity": 1.0},
+            "Link 3": {"name": "Khớp 3 (J3)", "stl_files": [],
+                       "offset_pos": [0.0, 0.0, 0.0], "offset_rot": [0.0, 0.0, 0.0],
+                       "joint_axis": "+Y", "color": "Silver", "scale": 1.0, "opacity": 1.0},
+            "Link 4": {"name": "Khớp 4 (J4)", "stl_files": [],
+                       "offset_pos": [0.0, 0.0, 0.0], "offset_rot": [0.0, 0.0, 0.0],
+                       "joint_axis": "+Y", "color": "Silver", "scale": 1.0, "opacity": 1.0},
+            "Link 5": {"name": "Khớp 5 (J5)", "stl_files": [],
+                       "offset_pos": [0.0, 0.0, 0.0], "offset_rot": [0.0, 0.0, 0.0],
+                       "joint_axis": "+X", "color": "Silver", "scale": 1.0, "opacity": 1.0},
+            "Link 6": {"name": "Khớp 6 (J6)", "stl_files": [],
+                       "offset_pos": [0.0, 0.0, 0.0], "offset_rot": [0.0, 0.0, 0.0],
+                       "joint_axis": "+Y", "color": "Silver", "scale": 1.0, "opacity": 1.0},
+        }
+
+        # Write blank model into config
+        self.config.config_data["current_robot_model"] = name
+        self.config.config_data["current_robot_model_type"] = "custom"
+        self.config.config_data["robot_links"] = blank_links
+        
+        # Save it immediately as a user model
+        self.config.save_current_as_model(name, description=f"Model trống tạo mới: {name}")
+
+        # Clear 3D scene entirely
+        self.viewer.clear_robot()
+        if self.viewer.render_window:
+            self.viewer.render_window.Render()
+
+        # Reset UI
+        self._refresh_model_list_ui()
+        self._load_selected_link_to_ui()
+        self._reload_dh_entries_from_config()
+        self._update_coordinates()
+
+        messagebox.showinfo(
+            "Tạo Model Mới",
+            f"Đã tạo model trống '{name}'.\n\n"
+            "Bây giờ hãy:\n"
+            "1. Chọn từng Khớp 1→6 bên dưới\n"
+            "2. Bấm '📁 Đổi File STL' để gắn file STL\n"
+            "3. Kéo slider để căn chỉnh vị trí/góc xoay\n"
+            "4. Nhập tên và bấm '💾 Lưu Mới' để lưu lại"
+        )
+
+    def _on_load_model(self):
+        """Loads selected robot model into active configuration."""
         from tkinter import messagebox
-        if self.config.apply_preset(preset_name):
+        name = self.preset_menu.get()
+        if not name or name == "(Chưa có model)":
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn model cần mở!")
+            return
+        if self.config.load_robot_model(name):
             self.kinematics.initialize_kinematics()
             self.viewer.reload_robot()
             self._load_selected_link_to_ui()
             self._reload_dh_entries_from_config()
             self._update_coordinates()
-            if hasattr(self, "preset_menu"):
-                self.preset_menu.set(preset_name)
-            if hasattr(self, "config_preset_menu"):
-                self.config_preset_menu.set(preset_name)
-            messagebox.showinfo("Preset", f"Đã nạp thành công preset '{preset_name}'!")
+            self._refresh_model_list_ui()
+            messagebox.showinfo("Thành công", f"Đã mở model '{name}'!")
         else:
-            messagebox.showerror("Lỗi", f"Không thể nạp preset '{preset_name}'")
+            messagebox.showerror("Lỗi", f"Không thể mở model '{name}'")
+
+    def _on_save_model_as(self):
+        """Saves current state as a new named robot model."""
+        from tkinter import messagebox
+        name = self.save_model_name_entry.get().strip() if hasattr(self, "save_model_name_entry") else ""
+        if not name:
+            messagebox.showwarning("Cảnh báo", "Vui lòng nhập tên cho model mới!")
+            return
+        # Confirm overwrite if exists
+        existing = self.config.get_saved_models()
+        if name in existing:
+            ok = messagebox.askyesno("Xác nhận", f"Model '{name}' đã tồn tại. Ghi đè?")
+            if not ok:
+                return
+        if self.config.save_current_as_model(name, description=f"Model tùy chỉnh: {name}"):
+            self._refresh_model_list_ui()
+            if hasattr(self, "save_model_name_entry"):
+                self.save_model_name_entry.delete(0, "end")
+            messagebox.showinfo("Thành công", f"Đã lưu model '{name}' thành công!")
+        else:
+            messagebox.showerror("Lỗi", "Không thể lưu model!")
+
+    def _on_delete_model(self):
+        """Deletes selected custom robot model."""
+        from tkinter import messagebox
+        name = self.preset_menu.get()
+        if not name or name == "(Chưa có model)":
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn model cần xóa!")
+            return
+        ok = messagebox.askyesno("Xác nhận xóa", f"Bạn có chắc muốn xóa model '{name}'?\n(Không thể xóa model hệ thống)")
+        if not ok:
+            return
+        success, msg = self.config.delete_saved_model(name)
+        if success:
+            self._refresh_model_list_ui()
+            self.viewer.reload_robot()
+            self._load_selected_link_to_ui()
+            self._reload_dh_entries_from_config()
+        messagebox.showinfo("Kết quả", msg)
+
+    def _on_export_model(self):
+        """Exports selected robot model to a JSON file."""
+        from tkinter import filedialog, messagebox
+        name = self.preset_menu.get()
+        if not name or name == "(Chưa có model)":
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn model cần xuất!")
+            return
+        file_path = filedialog.asksaveasfilename(
+            title=f"Xuất model '{name}'...",
+            defaultextension=".json",
+            initialfile=name.replace(" ", "_") + ".json",
+            filetypes=[("Robot Model JSON", "*.json"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+        if self.config.export_model_to_json(name, file_path):
+            messagebox.showinfo("Thành công", f"Đã xuất model ra:\n{file_path}")
+        else:
+            messagebox.showerror("Lỗi", "Không thể xuất file JSON!")
+
+    def _on_import_model(self):
+        """Imports a robot model from a JSON file."""
+        from tkinter import filedialog, messagebox
+        file_path = filedialog.askopenfilename(
+            title="Nhập file model robot JSON...",
+            filetypes=[("Robot Model JSON", "*.json"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+        success, result = self.config.import_model_from_json(file_path)
+        if success:
+            self._refresh_model_list_ui()
+            messagebox.showinfo("Thành công", f"Đã nhập model '{result}' thành công!")
+        else:
+            messagebox.showerror("Lỗi", result)
+
+    def _on_preset_selected(self, preset_name):
+        """Backward compat: loads a model by name (used by Config tab preset menus)."""
+        from tkinter import messagebox
+        if self.config.load_robot_model(preset_name):
+            self.kinematics.initialize_kinematics()
+            self.viewer.reload_robot()
+            self._load_selected_link_to_ui()
+            self._reload_dh_entries_from_config()
+            self._update_coordinates()
+            self._refresh_model_list_ui()
+            messagebox.showinfo("Model", f"Đã nạp model '{preset_name}'!")
+        else:
+            messagebox.showerror("Lỗi", f"Không thể nạp model '{preset_name}'")
 
     def _reload_dh_entries_from_config(self):
         """Refreshes DH parameter entry boxes in the Config tab."""

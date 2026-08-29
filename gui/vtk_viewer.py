@@ -294,41 +294,57 @@ class VTKViewer:
         self.config.set_link_config(link_key, cfg)
         self.update_link_offset(link_key, pos=[0, 0, 0], rot=[0, 0, 0], scale=1.0, render=render)
 
-    def reload_robot(self, new_stl_dir=None):
-        """Reloads the robot actors, potentially from a new STL folder."""
-        if not self.vtk_running:
+    def clear_robot(self):
+        """Removes ALL robot actors from the renderer and clears internal maps.
+        Called before loading a new model so no ghost parts remain.
+        """
+        if not self.vtk_running or not self.renderer:
             return
-            
-        # 1. Remove old Base actor from renderer
-        if "Base" in self.assemblies:
-            root = self.assemblies["Base"]
-            self.renderer.RemoveActor(root)
-        elif "Link Base-1.STL" in self.assemblies:
-            root = self.assemblies["Link Base-1.STL"]
-            self.renderer.RemoveActor(root)
-            
-        # 2. Reset STL directory if provided
-        if new_stl_dir:
-            self.stl_dir = new_stl_dir
-            
-        # 3. Clear existing components
+        
+        # Remove every assembly/actor that belongs to the robot hierarchy
+        for key, asm in list(self.assemblies.items()):
+            try:
+                self.renderer.RemoveActor(asm)
+            except Exception:
+                pass
+                
+        # Also sweep through actors dict (catches anything not in assemblies)
+        for key, actor in list(self.actors.items()):
+            try:
+                self.renderer.RemoveActor(actor)
+            except Exception:
+                pass
+
         self.actors.clear()
         self.link_actors.clear()
         self.assemblies.clear()
         self.base_transforms.clear()
         self.joint_transforms.clear()
         self.composite_transforms.clear()
-        
-        # 4. Rebuild robot actors and add them
+
+    def reload_robot(self, new_stl_dir=None):
+        """Reloads the robot actors, completely clearing old ones first."""
+        if not self.vtk_running:
+            return
+
+        # 1. Remove EVERY existing robot actor from renderer
+        self.clear_robot()
+
+        # 2. Reset STL directory if provided
+        if new_stl_dir:
+            self.stl_dir = new_stl_dir
+
+        # 3. Rebuild robot actors for new model type
         self._build_robot_actors()
         self.rebuild_custom_objects()
-        
-        # 5. Apply current joint rotation values
+
+        # 4. Apply current joint angles
         if hasattr(self.root, "joint_angles"):
             self.update_joints(self.root.joint_angles)
-            
-        # 6. Re-render
+
+        # 5. Reset camera and re-render
         if self.render_window:
+            self.renderer.ResetCamera()
             self.render_window.Render()
 
     def _build_robot_actors(self):

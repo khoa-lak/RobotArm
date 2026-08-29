@@ -167,22 +167,22 @@
     "J3\u0398DHpar": "0",
     "J4\u0398DHpar": "0",
     "J5\u0398DHpar": "0",
-    "J6\u0398DHpar": "0",
+    "J6\u0398DHpar": "180",
     "J1\u03b1DHpar": "0",
     "J2\u03b1DHpar": "-90",
     "J3\u03b1DHpar": "0",
     "J4\u03b1DHpar": "-90",
     "J5\u03b1DHpar": "90",
     "J6\u03b1DHpar": "-90",
-    "J1dDHpar": "141.5",
+    "J1dDHpar": "16",
     "J2dDHpar": "0",
-    "J3dDHpar": "56.4",
-    "J4dDHpar": "132",
+    "J3dDHpar": "0",
+    "J4dDHpar": "222.63",
     "J5dDHpar": "0",
-    "J6dDHpar": "58",
+    "J6dDHpar": "41",
     "J1aDHpar": "0",
-    "J2aDHpar": "40",
-    "J3aDHpar": "165",
+    "J2aDHpar": "64.2",
+    "J3aDHpar": "305",
     "J4aDHpar": "0",
     "J5aDHpar": "0",
     "J6aDHpar": "0",
@@ -194,13 +194,52 @@
     "J8CalStatVal2": 0,
     "J9CalStatVal2": 0,
     "setColor": "RoyalBlue",
-    "custom_stl_objects": [],
+    "custom_stl_objects": [
+        {
+            "id": "stl_1788017433423",
+            "name": "De",
+            "file_path": "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/De.stl",
+            "position": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": 1.0,
+            "color": "Gold",
+            "opacity": 1.0,
+            "parent": "Base (\u0110\u1ebf robot)",
+            "visible": true
+        },
+        {
+            "id": "stl_1788017453517",
+            "name": "link1",
+            "file_path": "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link1.stl",
+            "position": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": 1.0,
+            "color": "LimeGreen",
+            "opacity": 1.0,
+            "parent": "Link 1",
+            "visible": true
+        }
+    ],
     "robot_links": {
         "Base": {
             "name": "Base (Kh\u1edbp \u0111\u1ebf)",
-            "stl_files": [
-                "Link Base-1.STL"
-            ],
+            "stl_files": [],
             "offset_pos": [
                 0.0,
                 0.0,
@@ -218,33 +257,11 @@
         },
         "Link 1": {
             "name": "Kh\u1edbp 1 (J1)",
-            "stl_files": [
-                "Link 1-1.STL"
-            ],
+            "stl_files": [],
             "offset_pos": [
                 0.0,
                 0.0,
                 0.0
-            ],
-            "offset_rot": [
-                0.0,
-                0.0,
-                0.0
-            ],
-            "joint_axis": "-Z",
-            "color": "Silver",
-            "scale": 1.0,
-            "opacity": 1.0
-        },
-        "Link 2": {
-            "name": "Kh\u1edbp 2 (J2)",
-            "stl_files": [
-                "Link 2-1.STL"
-            ],
-            "offset_pos": [
-                0.0,
-                40.0,
-                141.5
             ],
             "offset_rot": [
                 0.0,
@@ -252,19 +269,35 @@
                 0.0
             ],
             "joint_axis": "+Z",
-            "color": "Orange",
+            "color": "Silver",
+            "scale": 1.0,
+            "opacity": 1.0
+        },
+        "Link 2": {
+            "name": "Kh\u1edbp 2 (J2)",
+            "stl_files": [],
+            "offset_pos": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "+Z",
+            "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0
         },
         "Link 3": {
             "name": "Kh\u1edbp 3 (J3)",
-            "stl_files": [
-                "Link 3-1.STL"
-            ],
+            "stl_files": [],
             "offset_pos": [
-                56.4,
                 0.0,
-                165.0
+                0.0,
+                0.0
             ],
             "offset_rot": [
                 0.0,
@@ -278,12 +311,10 @@
         },
         "Link 4": {
             "name": "Kh\u1edbp 4 (J4)",
-            "stl_files": [
-                "Link 4-1.STL"
-            ],
+            "stl_files": [],
             "offset_pos": [
                 0.0,
-                132.0,
+                0.0,
                 0.0
             ],
             "offset_rot": [
@@ -292,15 +323,13 @@
                 0.0
             ],
             "joint_axis": "+Y",
-            "color": "Orange",
+            "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0
         },
         "Link 5": {
             "name": "Kh\u1edbp 5 (J5)",
-            "stl_files": [
-                "Link 5-1.STL"
-            ],
+            "stl_files": [],
             "offset_pos": [
                 0.0,
                 0.0,
@@ -318,12 +347,10 @@
         },
         "Link 6": {
             "name": "Kh\u1edbp 6 (J6)",
-            "stl_files": [
-                "Link 6-1.STL"
-            ],
+            "stl_files": [],
             "offset_pos": [
                 0.0,
-                58.0,
+                0.0,
                 0.0
             ],
             "offset_rot": [
@@ -332,9 +359,186 @@
                 0.0
             ],
             "joint_axis": "+Y",
-            "color": "Orange",
+            "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0
+        }
+    },
+    "current_robot_model": "LAK",
+    "current_robot_model_type": "custom",
+    "saved_robot_models": {
+        "LAK": {
+            "type": "custom",
+            "name": "LAK",
+            "description": "Model tr\u1ed1ng t\u1ea1o m\u1edbi: LAK",
+            "dh_parameters": {
+                "J1\u0398DHpar": "0",
+                "J1\u03b1DHpar": "0",
+                "J1dDHpar": "16",
+                "J1aDHpar": "0",
+                "J2\u0398DHpar": "-90",
+                "J2\u03b1DHpar": "-90",
+                "J2dDHpar": "0",
+                "J2aDHpar": "64.2",
+                "J3\u0398DHpar": "0",
+                "J3\u03b1DHpar": "0",
+                "J3dDHpar": "0",
+                "J3aDHpar": "305",
+                "J4\u0398DHpar": "0",
+                "J4\u03b1DHpar": "-90",
+                "J4dDHpar": "222.63",
+                "J4aDHpar": "0",
+                "J5\u0398DHpar": "0",
+                "J5\u03b1DHpar": "90",
+                "J5dDHpar": "0",
+                "J5aDHpar": "0",
+                "J6\u0398DHpar": "180",
+                "J6\u03b1DHpar": "-90",
+                "J6dDHpar": "41",
+                "J6aDHpar": "0"
+            },
+            "joint_limits": {
+                "J1PosLim": "170",
+                "J1NegLim": "170",
+                "J2PosLim": "90",
+                "J2NegLim": "42",
+                "J3PosLim": "52",
+                "J3NegLim": "89",
+                "J4PosLim": "180",
+                "J4NegLim": "180",
+                "J5PosLim": "105",
+                "J5NegLim": "105",
+                "J6PosLim": "180",
+                "J6NegLim": "180"
+            },
+            "links": {
+                "Base": {
+                    "name": "Base (Kh\u1edbp \u0111\u1ebf)",
+                    "stl_files": [],
+                    "offset_pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "None",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0
+                },
+                "Link 1": {
+                    "name": "Kh\u1edbp 1 (J1)",
+                    "stl_files": [],
+                    "offset_pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "+Z",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0
+                },
+                "Link 2": {
+                    "name": "Kh\u1edbp 2 (J2)",
+                    "stl_files": [],
+                    "offset_pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "+Z",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0
+                },
+                "Link 3": {
+                    "name": "Kh\u1edbp 3 (J3)",
+                    "stl_files": [],
+                    "offset_pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "+Y",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0
+                },
+                "Link 4": {
+                    "name": "Kh\u1edbp 4 (J4)",
+                    "stl_files": [],
+                    "offset_pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "+Y",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0
+                },
+                "Link 5": {
+                    "name": "Kh\u1edbp 5 (J5)",
+                    "stl_files": [],
+                    "offset_pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "+X",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0
+                },
+                "Link 6": {
+                    "name": "Kh\u1edbp 6 (J6)",
+                    "stl_files": [],
+                    "offset_pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "+Y",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0
+                }
+            }
         }
     }
 }
