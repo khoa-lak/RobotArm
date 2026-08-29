@@ -167,22 +167,22 @@
     "J3\u0398DHpar": "0",
     "J4\u0398DHpar": "0",
     "J5\u0398DHpar": "0",
-    "J6\u0398DHpar": "180",
+    "J6\u0398DHpar": "0",
     "J1\u03b1DHpar": "0",
     "J2\u03b1DHpar": "-90",
     "J3\u03b1DHpar": "0",
     "J4\u03b1DHpar": "-90",
     "J5\u03b1DHpar": "90",
     "J6\u03b1DHpar": "-90",
-    "J1dDHpar": "16",
+    "J1dDHpar": "141.5",
     "J2dDHpar": "0",
-    "J3dDHpar": "0",
-    "J4dDHpar": "222.63",
+    "J3dDHpar": "56.4",
+    "J4dDHpar": "132",
     "J5dDHpar": "0",
-    "J6dDHpar": "41",
+    "J6dDHpar": "58",
     "J1aDHpar": "0",
-    "J2aDHpar": "64.2",
-    "J3aDHpar": "305",
+    "J2aDHpar": "40",
+    "J3aDHpar": "165",
     "J4aDHpar": "0",
     "J5aDHpar": "0",
     "J6aDHpar": "0",
@@ -194,5 +194,147 @@
     "J8CalStatVal2": 0,
     "J9CalStatVal2": 0,
     "setColor": "RoyalBlue",
-    "custom_stl_objects": []
+    "custom_stl_objects": [],
+    "robot_links": {
+        "Base": {
+            "name": "Base (Kh\u1edbp \u0111\u1ebf)",
+            "stl_files": [
+                "Link Base-1.STL"
+            ],
+            "offset_pos": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "None",
+            "color": "Silver",
+            "scale": 1.0,
+            "opacity": 1.0
+        },
+        "Link 1": {
+            "name": "Kh\u1edbp 1 (J1)",
+            "stl_files": [
+                "Link 1-1.STL"
+            ],
+            "offset_pos": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "-Z",
+            "color": "Silver",
+            "scale": 1.0,
+            "opacity": 1.0
+        },
+        "Link 2": {
+            "name": "Kh\u1edbp 2 (J2)",
+            "stl_files": [
+                "Link 2-1.STL"
+            ],
+            "offset_pos": [
+                0.0,
+                40.0,
+                141.5
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "+Z",
+            "color": "Orange",
+            "scale": 1.0,
+            "opacity": 1.0
+        },
+        "Link 3": {
+            "name": "Kh\u1edbp 3 (J3)",
+            "stl_files": [
+                "Link 3-1.STL"
+            ],
+            "offset_pos": [
+                56.4,
+                0.0,
+                165.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "+Y",
+            "color": "Silver",
+            "scale": 1.0,
+            "opacity": 1.0
+        },
+        "Link 4": {
+            "name": "Kh\u1edbp 4 (J4)",
+            "stl_files": [
+                "Link 4-1.STL"
+            ],
+            "offset_pos": [
+                0.0,
+                132.0,
+                0.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "+Y",
+            "color": "Orange",
+            "scale": 1.0,
+            "opacity": 1.0
+        },
+        "Link 5": {
+            "name": "Kh\u1edbp 5 (J5)",
+            "stl_files": [
+                "Link 5-1.STL"
+            ],
+            "offset_pos": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "+X",
+            "color": "Silver",
+            "scale": 1.0,
+            "opacity": 1.0
+        },
+        "Link 6": {
+            "name": "Kh\u1edbp 6 (J6)",
+            "stl_files": [
+                "Link 6-1.STL"
+            ],
+            "offset_pos": [
+                0.0,
+                58.0,
+                0.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "+Y",
+            "color": "Orange",
+            "scale": 1.0,
+            "opacity": 1.0
+        }
+    }
 }

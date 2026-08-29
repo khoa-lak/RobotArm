@@ -42,6 +42,21 @@ class MainWindow(ctk.CTk):
         self.viewer = VTKViewer(self, self.config)
         self.selected_obj_id = None
         self._updating_obj_ui = False
+        
+        # 3b. Robot Link Alignment & Calibration State
+        self.selected_link_key = "Base"
+        self._updating_link_ui = False
+        self.link_display_map = {
+            "Base (Khớp đế)": "Base",
+            "Khớp 1 (J1 - Trục quay Đế)": "Link 1",
+            "Khớp 2 (J2 - Trục Vai)": "Link 2",
+            "Khớp 3 (J3 - Trục Khuỷu)": "Link 3",
+            "Khớp 4 (J4 - Trục Xoay Cổ tay)": "Link 4",
+            "Khớp 5 (J5 - Trục Gập Cổ tay)": "Link 5",
+            "Khớp 6 (J6 - Mặt Bích / Flange)": "Link 6"
+        }
+        self.link_key_to_display = {v: k for k, v in self.link_display_map.items()}
+        
         self._load_saved_custom_objects()
         
         # State variables for Program Editor & Simulator
@@ -89,10 +104,12 @@ class MainWindow(ctk.CTk):
         self.tabview.pack(fill="both", expand=True, padx=5, pady=5)
         
         self.tab_program = self.tabview.add("Program")
+        self.tab_links = self.tabview.add("Robot Links")
         self.tab_objects = self.tabview.add("Objects (STL)")
         self.tab_config = self.tabview.add("Config")
         
         self.tab_program.grid_columnconfigure(0, weight=1)
+        self.tab_links.grid_columnconfigure(0, weight=1)
         self.tab_objects.grid_columnconfigure(0, weight=1)
         self.tab_config.grid_columnconfigure(0, weight=1)
         
@@ -103,6 +120,9 @@ class MainWindow(ctk.CTk):
         
         # Create program editor elements inside the Program tab
         self._create_program_tab_widgets()
+
+        # Create robot links alignment & calibration controls
+        self._create_robot_links_tab_widgets()
 
         # Create custom objects controls inside the Objects tab
         self._create_objects_tab_widgets()
@@ -240,9 +260,31 @@ class MainWindow(ctk.CTk):
             self.after(10, self._next_real_step)
 
     def _create_config_tab_widgets(self):
+        # 0. Preset Selector Frame
+        preset_frame = ctk.CTkLabelFrame(self.tab_config, text="Robot Presets (Mẫu Cấu Hình Robot)")
+        preset_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
+        preset_frame.grid_columnconfigure(0, weight=1)
+        preset_frame.grid_columnconfigure(1, weight=0)
+
+        presets = list(self.config.get_presets().keys())
+        self.config_preset_menu = ctk.CTkOptionMenu(
+            preset_frame,
+            values=presets,
+            command=self._on_preset_selected
+        )
+        self.config_preset_menu.grid(row=0, column=0, padx=8, pady=8, sticky="ew")
+
+        load_preset_btn = ctk.CTkButton(
+            preset_frame,
+            text="Nạp Preset",
+            width=90,
+            command=lambda: self._on_preset_selected(self.config_preset_menu.get())
+        )
+        load_preset_btn.grid(row=0, column=1, padx=(0, 8), pady=8)
+
         # 1. DH Parameters grid frame
         dh_frame = ctk.CTkLabelFrame(self.tab_config, text="DH Parameters Editor (J1-J6)")
-        dh_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        dh_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
         
         dh_frame.grid_columnconfigure(0, weight=1) # Joint label column
         dh_frame.grid_columnconfigure((1, 2, 3, 4), weight=2)
@@ -272,7 +314,7 @@ class MainWindow(ctk.CTk):
                 
         # 2. STL Path configuration frame
         path_frame = ctk.CTkLabelFrame(self.tab_config, text="Robot 3D Model STL Directory")
-        path_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        path_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
         path_frame.grid_columnconfigure(0, weight=1)
         
         self.stl_path_entry = ctk.CTkEntry(path_frame, placeholder_text="Select folder containing STL files")
@@ -284,7 +326,7 @@ class MainWindow(ctk.CTk):
         
         # 3. Apply Button
         apply_btn = ctk.CTkButton(self.tab_config, text="Apply & Save Config", height=40, command=self._apply_and_save_config)
-        apply_btn.grid(row=2, column=0, padx=10, pady=15, sticky="ew")
+        apply_btn.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
 
     def _browse_stl_dir(self):
         from tkinter import filedialog
@@ -679,8 +721,493 @@ class MainWindow(ctk.CTk):
         # 4. Update XYZ math coordinates display
         self._update_coordinates()
         
-        # 5. Send serial updates
-        self.serial.send_move_command(self.joint_angles)
+    # -------------------------------------------------------------------------
+    # Robot Links Alignment & STL Calibration (Căn chỉnh Khớp 3D Robot)
+    # -------------------------------------------------------------------------
+    def _create_robot_links_tab_widgets(self):
+        """Constructs the UI for inspecting, importing, and translating/rotating robot links."""
+        self.links_scroll_frame = ctk.CTkScrollableFrame(self.tab_links, fg_color="transparent")
+        self.links_scroll_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.links_scroll_frame.grid_columnconfigure(0, weight=1)
+
+        # 1. Preset Selector Frame
+        preset_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Robot Preset (Mẫu Robot)")
+        preset_frame.grid(row=0, column=0, padx=5, pady=(2, 6), sticky="ew")
+        preset_frame.grid_columnconfigure(0, weight=1)
+        preset_frame.grid_columnconfigure(1, weight=0)
+
+        presets = list(self.config.get_presets().keys())
+        self.preset_menu = ctk.CTkOptionMenu(
+            preset_frame,
+            values=presets,
+            command=self._on_preset_selected
+        )
+        self.preset_menu.grid(row=0, column=0, padx=6, pady=6, sticky="ew")
+
+        load_preset_btn = ctk.CTkButton(
+            preset_frame,
+            text="Nạp Preset",
+            width=80,
+            command=lambda: self._on_preset_selected(self.preset_menu.get())
+        )
+        load_preset_btn.grid(row=0, column=1, padx=(0, 6), pady=6)
+
+        # 2. Selected Link Selection Frame
+        link_sel_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Khâu / Khớp Đang Chọn (Selected Link)")
+        link_sel_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        link_sel_frame.grid_columnconfigure(0, weight=1)
+
+        display_options = list(self.link_display_map.keys())
+        self.link_selector = ctk.CTkOptionMenu(
+            link_sel_frame,
+            values=display_options,
+            command=self._on_select_link
+        )
+        self.link_selector.grid(row=0, column=0, padx=8, pady=(8, 6), sticky="ew")
+
+        # Action buttons row: Reset & Save
+        btn_box = ctk.CTkFrame(link_sel_frame, fg_color="transparent")
+        btn_box.grid(row=1, column=0, padx=6, pady=(0, 8), sticky="ew")
+        btn_box.grid_columnconfigure((0, 1), weight=1)
+
+        self.reset_link_btn = ctk.CTkButton(
+            btn_box,
+            text="🔄 Đặt lại khâu này",
+            fg_color="#555",
+            hover_color="#333",
+            command=self._reset_selected_link_transform
+        )
+        self.reset_link_btn.grid(row=0, column=0, padx=3, pady=2, sticky="ew")
+
+        self.save_links_btn = ctk.CTkButton(
+            btn_box,
+            text="💾 Lưu cấu hình khớp",
+            fg_color="#1eaa59",
+            hover_color="#13773e",
+            command=self._save_robot_links_config
+        )
+        self.save_links_btn.grid(row=0, column=1, padx=3, pady=2, sticky="ew")
+
+        # 3. STL File Management Card
+        stl_card = ctk.CTkLabelFrame(self.links_scroll_frame, text="File STL 3D của Khớp (STL Geometry)")
+        stl_card.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
+        stl_card.grid_columnconfigure(0, weight=1)
+
+        self.link_stl_lbl = ctk.CTkLabel(
+            stl_card,
+            text="File STL: Link Base-1.STL",
+            font=("Arial", 11),
+            anchor="w",
+            text_color="#3B8ED0"
+        )
+        self.link_stl_lbl.grid(row=0, column=0, columnspan=2, padx=8, pady=(6, 4), sticky="w")
+
+        browse_stl_btn = ctk.CTkButton(
+            stl_card,
+            text="📁 Đổi File STL cho Khớp này (Browse)",
+            height=32,
+            fg_color="#1f538d",
+            hover_color="#14375e",
+            command=self._on_link_stl_browse
+        )
+        browse_stl_btn.grid(row=1, column=0, columnspan=2, padx=8, pady=(2, 8), sticky="ew")
+
+        # 4. Position Translation Sliders (X, Y, Z mm)
+        pos_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Dịch chuyển Gốc STL (Position Offset - mm)")
+        pos_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
+        pos_frame.grid_columnconfigure(0, weight=1)
+
+        self.link_pos_sliders = {}
+        self.link_pos_entries = {}
+
+        pos_axes = [
+            ("X", -1000.0, 1000.0),
+            ("Y", -1000.0, 1000.0),
+            ("Z", -1000.0, 1500.0)
+        ]
+
+        for idx, (axis, min_val, max_val) in enumerate(pos_axes):
+            axis_card = ctk.CTkFrame(pos_frame, fg_color="#2b2b2b", corner_radius=6)
+            axis_card.grid(row=idx, column=0, padx=6, pady=4, sticky="ew")
+            axis_card.grid_columnconfigure(1, weight=1)
+
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
+            lbl.grid(row=0, column=0, padx=(6, 2), pady=4, sticky="w")
+
+            entry = ctk.CTkEntry(axis_card, width=70, height=26, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.0")
+            entry.grid(row=0, column=1, padx=2, pady=4, sticky="w")
+            entry.bind("<Return>", lambda e: self._on_link_entry_update())
+            entry.bind("<FocusOut>", lambda e: self._on_link_entry_update())
+            self.link_pos_entries[axis] = entry
+
+            unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=4, sticky="w")
+
+            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
+            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
+
+            for step in [-10, -1, 1, 10]:
+                text = f"{step:+d}" if step > 0 else str(step)
+                btn = ctk.CTkButton(
+                    step_box,
+                    text=text,
+                    width=30,
+                    height=22,
+                    font=("Arial", 9),
+                    command=lambda a=axis, s=step: self._step_link_pos(a, s)
+                )
+                btn.pack(side="left", padx=1)
+
+            slider = ctk.CTkSlider(
+                axis_card,
+                from_=min_val,
+                to=max_val,
+                height=16,
+                command=lambda val, a=axis: self._on_link_pos_slider_move(a, val)
+            )
+            slider.set(0.0)
+            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(2, 6), sticky="ew")
+            self.link_pos_sliders[axis] = slider
+
+        # 5. Rotation Sliders (Rx, Ry, Rz deg)
+        rot_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Góc xoay Ban đầu STL (Rotation - độ °)")
+        rot_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")
+        rot_frame.grid_columnconfigure(0, weight=1)
+
+        self.link_rot_sliders = {}
+        self.link_rot_entries = {}
+
+        rot_axes = [
+            ("Rx", "Roll (X)"),
+            ("Ry", "Pitch (Y)"),
+            ("Rz", "Yaw (Z)")
+        ]
+
+        for idx, (axis, name) in enumerate(rot_axes):
+            axis_card = ctk.CTkFrame(rot_frame, fg_color="#2b2b2b", corner_radius=6)
+            axis_card.grid(row=idx, column=0, padx=6, pady=4, sticky="ew")
+            axis_card.grid_columnconfigure(1, weight=1)
+
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
+            lbl.grid(row=0, column=0, padx=(6, 2), pady=4, sticky="w")
+
+            entry = ctk.CTkEntry(axis_card, width=70, height=26, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.0")
+            entry.grid(row=0, column=1, padx=2, pady=4, sticky="w")
+            entry.bind("<Return>", lambda e: self._on_link_entry_update())
+            entry.bind("<FocusOut>", lambda e: self._on_link_entry_update())
+            self.link_rot_entries[axis] = entry
+
+            unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 11, "bold"), text_color="gray")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=4, sticky="w")
+
+            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
+            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
+
+            for step in [-15, -1, 1, 15]:
+                text = f"{step:+d}°" if step > 0 else f"{step}°"
+                btn = ctk.CTkButton(
+                    step_box,
+                    text=text,
+                    width=32,
+                    height=22,
+                    font=("Arial", 9),
+                    command=lambda a=axis, s=step: self._step_link_rot(a, s)
+                )
+                btn.pack(side="left", padx=1)
+
+            slider = ctk.CTkSlider(
+                axis_card,
+                from_=-180.0,
+                to=180.0,
+                height=16,
+                command=lambda val, a=axis: self._on_link_rot_slider_move(a, val)
+            )
+            slider.set(0.0)
+            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(2, 6), sticky="ew")
+            self.link_rot_sliders[axis] = slider
+
+        # 6. Joint Axis, Color, Scale Card
+        prop_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Trục quay & Hiển thị (Joint Axis & Style)")
+        prop_frame.grid(row=5, column=0, padx=5, pady=5, sticky="ew")
+        prop_frame.grid_columnconfigure(1, weight=1)
+
+        # Joint Axis Menu
+        ctk.CTkLabel(prop_frame, text="Trục quay khớp:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=8, pady=5, sticky="w")
+        self.link_axis_menu = ctk.CTkOptionMenu(
+            prop_frame,
+            values=[
+                "+Z (Quay quanh Z thuận)",
+                "-Z (Quay quanh Z nghịch)",
+                "+Y (Quay quanh Y thuận)",
+                "-Y (Quay quanh Y nghịch)",
+                "+X (Quay quanh X thuận)",
+                "-X (Quay quanh X nghịch)",
+                "None (Cố định)"
+            ],
+            command=self._on_link_axis_change
+        )
+        self.link_axis_menu.grid(row=0, column=1, padx=8, pady=5, sticky="ew")
+
+        # Color Menu
+        ctk.CTkLabel(prop_frame, text="Màu sắc:", font=("Arial", 11, "bold")).grid(row=1, column=0, padx=8, pady=5, sticky="w")
+        self.link_color_menu = ctk.CTkOptionMenu(
+            prop_frame,
+            values=["Silver", "Orange", "DimGray", "SlateBlue", "LimeGreen", "Gold", "Crimson", "Cyan", "White"],
+            command=self._on_link_color_change
+        )
+        self.link_color_menu.grid(row=1, column=1, padx=8, pady=5, sticky="ew")
+
+        # Scale Slider
+        ctk.CTkLabel(prop_frame, text="Tỉ lệ (Scale):", font=("Arial", 11, "bold")).grid(row=2, column=0, padx=8, pady=5, sticky="w")
+        s_box = ctk.CTkFrame(prop_frame, fg_color="transparent")
+        s_box.grid(row=2, column=1, padx=8, pady=5, sticky="ew")
+        s_box.grid_columnconfigure(0, weight=1)
+
+        self.link_scale_slider = ctk.CTkSlider(
+            s_box,
+            from_=0.1,
+            to=5.0,
+            height=16,
+            command=self._on_link_scale_slider_move
+        )
+        self.link_scale_slider.set(1.0)
+        self.link_scale_slider.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+        self.link_scale_lbl = ctk.CTkLabel(s_box, text="1.00x", width=45, font=("Arial", 11, "bold"))
+        self.link_scale_lbl.grid(row=0, column=1, sticky="e")
+
+        # Load initial values for "Base"
+        self._load_selected_link_to_ui()
+
+    def _on_select_link(self, display_name):
+        """Callback when user selects a link in the dropdown."""
+        link_key = self.link_display_map.get(display_name, "Base")
+        self.selected_link_key = link_key
+        self._load_selected_link_to_ui()
+
+    def _load_selected_link_to_ui(self):
+        """Populates sliders, entries, and options with the selected link's configuration."""
+        cfg = self.config.get_link_config(self.selected_link_key)
+        self._updating_link_ui = True
+
+        # Update STL label
+        stl_list = cfg.get("stl_files", [])
+        stl_names = ", ".join([os.path.basename(f) for f in stl_list]) if stl_list else "(Chưa có STL)"
+        self.link_stl_lbl.configure(text=f"File STL: {stl_names}")
+
+        # Update Position
+        pos = cfg.get("offset_pos", [0.0, 0.0, 0.0])
+        for idx, axis in enumerate(["X", "Y", "Z"]):
+            val = pos[idx]
+            self.link_pos_entries[axis].delete(0, "end")
+            self.link_pos_entries[axis].insert(0, f"{val:.2f}")
+            if axis in ["X", "Y"]:
+                self.link_pos_sliders[axis].set(max(-1000.0, min(1000.0, val)))
+            else:
+                self.link_pos_sliders[axis].set(max(-1000.0, min(1500.0, val)))
+
+        # Update Rotation
+        rot = cfg.get("offset_rot", [0.0, 0.0, 0.0])
+        for idx, axis in enumerate(["Rx", "Ry", "Rz"]):
+            val = rot[idx]
+            self.link_rot_entries[axis].delete(0, "end")
+            self.link_rot_entries[axis].insert(0, f"{val:.2f}")
+            self.link_rot_sliders[axis].set(max(-180.0, min(180.0, val)))
+
+        # Update Axis
+        axis_raw = cfg.get("joint_axis", "None" if self.selected_link_key == "Base" else "+Z")
+        for val in self.link_axis_menu._values:
+            if val.startswith(axis_raw):
+                self.link_axis_menu.set(val)
+                break
+        else:
+            self.link_axis_menu.set("+Z (Quay quanh Z thuận)")
+
+        # Update Color
+        color = cfg.get("color", "Silver")
+        self.link_color_menu.set(color)
+
+        # Update Scale
+        scale = cfg.get("scale", 1.0)
+        self.link_scale_slider.set(scale)
+        self.link_scale_lbl.configure(text=f"{scale:.2f}x")
+
+        self._updating_link_ui = False
+
+    def _on_link_stl_browse(self):
+        """Opens file dialog to choose an STL file for the current link."""
+        from tkinter import filedialog, messagebox
+        file_path = filedialog.askopenfilename(
+            title=f"Chọn file STL cho {self.selected_link_key}",
+            filetypes=[("STL 3D Model", "*.stl *.STL"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+        if not os.path.exists(file_path):
+            messagebox.showerror("Lỗi", f"Không tìm thấy file: {file_path}")
+            return
+            
+        self.viewer.update_link_stl(self.selected_link_key, [file_path])
+        self._load_selected_link_to_ui()
+        messagebox.showinfo("Thành công", f"Đã nạp file STL '{os.path.basename(file_path)}' cho {self.selected_link_key}!")
+
+    def _on_link_pos_slider_move(self, axis, val):
+        """Callback when link position slider moves."""
+        if self._updating_link_ui:
+            return
+        cfg = self.config.get_link_config(self.selected_link_key)
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
+        pos = list(cfg.get("offset_pos", [0.0, 0.0, 0.0]))
+        pos[axis_idx] = float(val)
+
+        self._updating_link_ui = True
+        self.link_pos_entries[axis].delete(0, "end")
+        self.link_pos_entries[axis].insert(0, f"{val:.2f}")
+        self._updating_link_ui = False
+
+        self.viewer.update_link_offset(self.selected_link_key, pos=pos)
+
+    def _on_link_rot_slider_move(self, axis, val):
+        """Callback when link rotation slider moves."""
+        if self._updating_link_ui:
+            return
+        cfg = self.config.get_link_config(self.selected_link_key)
+        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
+        rot = list(cfg.get("offset_rot", [0.0, 0.0, 0.0]))
+        rot[axis_idx] = float(val)
+
+        self._updating_link_ui = True
+        self.link_rot_entries[axis].delete(0, "end")
+        self.link_rot_entries[axis].insert(0, f"{val:.2f}")
+        self._updating_link_ui = False
+
+        self.viewer.update_link_offset(self.selected_link_key, rot=rot)
+
+    def _on_link_entry_update(self):
+        """Callback when user edits numeric entries for the link."""
+        if self._updating_link_ui:
+            return
+        try:
+            x = float(self.link_pos_entries["X"].get().strip())
+            y = float(self.link_pos_entries["Y"].get().strip())
+            z = float(self.link_pos_entries["Z"].get().strip())
+            rx = float(self.link_rot_entries["Rx"].get().strip())
+            ry = float(self.link_rot_entries["Ry"].get().strip())
+            rz = float(self.link_rot_entries["Rz"].get().strip())
+        except ValueError:
+            return
+
+        self._updating_link_ui = True
+        self.link_pos_sliders["X"].set(max(-1000.0, min(1000.0, x)))
+        self.link_pos_sliders["Y"].set(max(-1000.0, min(1000.0, y)))
+        self.link_pos_sliders["Z"].set(max(-1000.0, min(1500.0, z)))
+        self.link_rot_sliders["Rx"].set(max(-180.0, min(180.0, rx)))
+        self.link_rot_sliders["Ry"].set(max(-180.0, min(180.0, ry)))
+        self.link_rot_sliders["Rz"].set(max(-180.0, min(180.0, rz)))
+        self._updating_link_ui = False
+
+        self.viewer.update_link_offset(
+            self.selected_link_key,
+            pos=[x, y, z],
+            rot=[rx, ry, rz]
+        )
+
+    def _step_link_pos(self, axis, delta):
+        """Steps position by fixed offset."""
+        cfg = self.config.get_link_config(self.selected_link_key)
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
+        pos = list(cfg.get("offset_pos", [0.0, 0.0, 0.0]))
+        pos[axis_idx] += float(delta)
+
+        self._updating_link_ui = True
+        self.link_pos_entries[axis].delete(0, "end")
+        self.link_pos_entries[axis].insert(0, f"{pos[axis_idx]:.2f}")
+        if axis in ["X", "Y"]:
+            self.link_pos_sliders[axis].set(max(-1000.0, min(1000.0, pos[axis_idx])))
+        else:
+            self.link_pos_sliders[axis].set(max(-1000.0, min(1500.0, pos[axis_idx])))
+        self._updating_link_ui = False
+
+        self.viewer.update_link_offset(self.selected_link_key, pos=pos)
+
+    def _step_link_rot(self, axis, delta):
+        """Steps rotation angle by fixed step."""
+        cfg = self.config.get_link_config(self.selected_link_key)
+        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
+        rot = list(cfg.get("offset_rot", [0.0, 0.0, 0.0]))
+        new_val = rot[axis_idx] + float(delta)
+        while new_val > 180.0:
+            new_val -= 360.0
+        while new_val < -180.0:
+            new_val += 360.0
+        rot[axis_idx] = new_val
+
+        self._updating_link_ui = True
+        self.link_rot_entries[axis].delete(0, "end")
+        self.link_rot_entries[axis].insert(0, f"{new_val:.2f}")
+        self.link_rot_sliders[axis].set(new_val)
+        self._updating_link_ui = False
+
+        self.viewer.update_link_offset(self.selected_link_key, rot=rot)
+
+    def _on_link_axis_change(self, axis_val):
+        """Callback when user changes joint axis."""
+        axis_code = axis_val.split()[0] if axis_val else "+Z"
+        self.viewer.update_link_joint_axis(self.selected_link_key, axis_code)
+
+    def _on_link_color_change(self, color_val):
+        """Callback when user changes link color."""
+        self.viewer.update_link_color(self.selected_link_key, color_val)
+
+    def _on_link_scale_slider_move(self, val):
+        """Callback when user moves link scale slider."""
+        if self._updating_link_ui:
+            return
+        s_val = float(val)
+        self.link_scale_lbl.configure(text=f"{s_val:.2f}x")
+        self.viewer.update_link_offset(self.selected_link_key, scale=s_val)
+
+    def _save_robot_links_config(self):
+        """Persists current robot links configuration to defaults.json."""
+        from tkinter import messagebox
+        self.config.save_config()
+        messagebox.showinfo("Thành công", "Đã lưu cấu hình cơ cấu và khớp robot thành công!")
+
+    def _reset_selected_link_transform(self):
+        """Resets the transform for the selected link to zero."""
+        self.viewer.reset_link_transform(self.selected_link_key)
+        self._load_selected_link_to_ui()
+
+    def _on_preset_selected(self, preset_name):
+        """Applies a built-in robot preset."""
+        from tkinter import messagebox
+        if self.config.apply_preset(preset_name):
+            self.kinematics.initialize_kinematics()
+            self.viewer.reload_robot()
+            self._load_selected_link_to_ui()
+            self._reload_dh_entries_from_config()
+            self._update_coordinates()
+            if hasattr(self, "preset_menu"):
+                self.preset_menu.set(preset_name)
+            if hasattr(self, "config_preset_menu"):
+                self.config_preset_menu.set(preset_name)
+            messagebox.showinfo("Preset", f"Đã nạp thành công preset '{preset_name}'!")
+        else:
+            messagebox.showerror("Lỗi", f"Không thể nạp preset '{preset_name}'")
+
+    def _reload_dh_entries_from_config(self):
+        """Refreshes DH parameter entry boxes in the Config tab."""
+        param_keys = ["Θ", "α", "d", "a"]
+        for row_idx in range(6):
+            for param in param_keys:
+                if hasattr(self, "dh_entries") and (row_idx+1, param) in self.dh_entries:
+                    cfg_key = f"J{row_idx+1}{param}DHpar"
+                    val = self.config.get(cfg_key, "0.0")
+                    entry = self.dh_entries[(row_idx+1, param)]
+                    entry.delete(0, "end")
+                    entry.insert(0, str(val))
 
     # -------------------------------------------------------------------------
     # Custom STL 3D Objects Management & UI (Quản lý vật thể 3D STL tùy chỉnh)

@@ -12,8 +12,12 @@ class VTKViewer:
         self.render_window = None
         self.interactor = None
         
+        # List of 7 link identifiers
+        self.link_keys = ["Base", "Link 1", "Link 2", "Link 3", "Link 4", "Link 5", "Link 6"]
+        
         # Dictionary storage for VTK components
         self.actors = {}
+        self.link_actors = {}
         self.assemblies = {}
         self.base_transforms = {}
         self.joint_transforms = {}
@@ -159,43 +163,147 @@ class VTKViewer:
         event_loop()
 
 
+    def _apply_link_base_transform(self, base_tf, pos, rot, scale=1.0):
+        """Applies translation, rotation and scale to the base transform of a robot link."""
+        base_tf.Identity()
+        base_tf.Translate(float(pos[0]), float(pos[1]), float(pos[2]))
+        base_tf.RotateZ(float(rot[2]))
+        base_tf.RotateY(float(rot[1]))
+        base_tf.RotateX(float(rot[0]))
+        if float(scale) != 1.0:
+            s = float(scale)
+            base_tf.Scale(s, s, s)
+
     def update_joints(self, joint_angles):
         """Updates the rotations of the robot parts.
-        joint_angles: list of 6 angles in degrees
+        joint_angles: list of 6 angles in degrees [J1, J2, J3, J4, J5, J6]
         """
         if not self.vtk_running:
             return
             
-        # Match direction and scale map from original AR4 HMI
-        angles = {
-            "Link 1-1.STL": -joint_angles[0],
-            "Link 2-1.STL": joint_angles[1],
-            "Link 3-1.STL": -joint_angles[2],
-            "Link 4-1.STL": -joint_angles[3],
-            "Link 5-1.STL": -joint_angles[4],
-            "Link 6-1.STL": joint_angles[5]
-        }
+        links_cfg = self.config.get_robot_links()
         
-        for stl, angle in angles.items():
-            if stl in self.joint_transforms:
-                jt = self.joint_transforms[stl]
-                jt.Identity()
-                jt.RotateZ(angle)
+        for i in range(1, 7):
+            link_key = f"Link {i}"
+            if link_key in self.joint_transforms:
+                cfg = links_cfg.get(link_key, {})
+                axis_str = cfg.get("joint_axis", "-Z" if i in [1, 3, 4, 5] else "+Z")
+                angle = joint_angles[i - 1]
                 
-                ct = self.composite_transforms[stl]
+                jt = self.joint_transforms[link_key]
+                jt.Identity()
+                
+                # Apply rotation based on configured axis
+                if axis_str == "+Z":
+                    jt.RotateZ(angle)
+                elif axis_str == "-Z":
+                    jt.RotateZ(-angle)
+                elif axis_str == "+Y":
+                    jt.RotateY(angle)
+                elif axis_str == "-Y":
+                    jt.RotateY(-angle)
+                elif axis_str == "+X":
+                    jt.RotateX(angle)
+                elif axis_str == "-X":
+                    jt.RotateX(-angle)
+                else:
+                    jt.RotateZ(angle)
+                    
+                ct = self.composite_transforms[link_key]
                 ct.Identity()
-                ct.Concatenate(self.base_transforms[stl])
+                ct.Concatenate(self.base_transforms[link_key])
                 ct.Concatenate(jt)
                 
-        self.render_window.Render()
+        if self.render_window:
+            self.render_window.Render()
+
+    def update_link_offset(self, link_key, pos=None, rot=None, scale=None, render=True):
+        """Live updates base transform (position, rotation, scale) for a robot link."""
+        if link_key not in self.base_transforms:
+            return
+            
+        cfg = self.config.get_link_config(link_key)
+        if pos is not None:
+            cfg["offset_pos"] = [float(p) for p in pos]
+        if rot is not None:
+            cfg["offset_rot"] = [float(r) for r in rot]
+        if scale is not None:
+            cfg["scale"] = float(scale)
+            
+        base_tf = self.base_transforms[link_key]
+        self._apply_link_base_transform(
+            base_tf, 
+            cfg.get("offset_pos", [0.0, 0.0, 0.0]), 
+            cfg.get("offset_rot", [0.0, 0.0, 0.0]), 
+            cfg.get("scale", 1.0)
+        )
+        
+        ct = self.composite_transforms[link_key]
+        ct.Identity()
+        ct.Concatenate(base_tf)
+        ct.Concatenate(self.joint_transforms[link_key])
+        
+        if render and self.render_window:
+            self.render_window.Render()
+
+    def update_link_joint_axis(self, link_key, axis_str, render=True):
+        """Updates joint axis and recalculates joint rotation."""
+        if link_key not in self.joint_transforms:
+            return
+        cfg = self.config.get_link_config(link_key)
+        cfg["joint_axis"] = axis_str
+        self.config.set_link_config(link_key, cfg)
+        if hasattr(self.root, "joint_angles"):
+            self.update_joints(self.root.joint_angles)
+        elif render and self.render_window:
+            self.render_window.Render()
+
+    def update_link_color(self, link_key, color_name, render=True):
+        """Updates the visual color of all actors belonging to a robot link."""
+        if link_key not in self.link_actors:
+            return
+        colors = vtk.vtkNamedColors()
+        for actor, _ in self.link_actors[link_key]:
+            try:
+                actor.GetProperty().SetColor(colors.GetColor3d(color_name))
+            except Exception:
+                actor.GetProperty().SetColor(0.75, 0.75, 0.75)
+                
+        cfg = self.config.get_link_config(link_key)
+        cfg["color"] = color_name
+        self.config.set_link_config(link_key, cfg)
+        
+        if render and self.render_window:
+            self.render_window.Render()
+
+    def update_link_stl(self, link_key, stl_files):
+        """Assigns new STL files to a link and reloads the robot hierarchy."""
+        cfg = self.config.get_link_config(link_key)
+        if isinstance(stl_files, str):
+            stl_files = [stl_files]
+        cfg["stl_files"] = stl_files
+        self.config.set_link_config(link_key, cfg)
+        self.reload_robot()
+
+    def reset_link_transform(self, link_key, render=True):
+        """Resets offset position, rotation, and scale to defaults (0,0,0) and scale=1."""
+        cfg = self.config.get_link_config(link_key)
+        cfg["offset_pos"] = [0.0, 0.0, 0.0]
+        cfg["offset_rot"] = [0.0, 0.0, 0.0]
+        cfg["scale"] = 1.0
+        self.config.set_link_config(link_key, cfg)
+        self.update_link_offset(link_key, pos=[0, 0, 0], rot=[0, 0, 0], scale=1.0, render=render)
 
     def reload_robot(self, new_stl_dir=None):
         """Reloads the robot actors, potentially from a new STL folder."""
         if not self.vtk_running:
             return
             
-        # 1. Remove the old root assembly actor from the renderer
-        if "Link Base-1.STL" in self.assemblies:
+        # 1. Remove old Base actor from renderer
+        if "Base" in self.assemblies:
+            root = self.assemblies["Base"]
+            self.renderer.RemoveActor(root)
+        elif "Link Base-1.STL" in self.assemblies:
             root = self.assemblies["Link Base-1.STL"]
             self.renderer.RemoveActor(root)
             
@@ -205,6 +313,7 @@ class VTKViewer:
             
         # 3. Clear existing components
         self.actors.clear()
+        self.link_actors.clear()
         self.assemblies.clear()
         self.base_transforms.clear()
         self.joint_transforms.clear()
@@ -215,102 +324,94 @@ class VTKViewer:
         self.rebuild_custom_objects()
         
         # 5. Apply current joint rotation values
-        self.update_joints(self.root.joint_angles)
-        
-        # 6. Reset camera view and re-render
-        self.renderer.ResetCamera()
-        self.render_window.Render()
+        if hasattr(self.root, "joint_angles"):
+            self.update_joints(self.root.joint_angles)
+            
+        # 6. Re-render
+        if self.render_window:
+            self.render_window.Render()
 
     def _build_robot_actors(self):
-        """Loads STL files, applies offsets, and builds parent-child joints chain."""
+        """Loads STL files, applies offsets, and builds parent-child joints chain using config."""
         colors = vtk.vtkNamedColors()
-        stl_files = list(self.color_map.keys())
+        links_cfg = self.config.get_robot_links()
         
-        for stl in stl_files:
-            file_path = os.path.join(self.stl_dir, stl)
-            if not os.path.exists(file_path):
-                print(f"[WARNING] STL File not found: {file_path}")
-                continue
-                
-            reader = vtk.vtkSTLReader()
-            reader.SetFileName(file_path)
-            reader.Update()
+        self.link_actors = {}
+        
+        for link_key in self.link_keys:
+            cfg = links_cfg.get(link_key, {})
+            stl_files = cfg.get("stl_files", [])
+            pos = cfg.get("offset_pos", [0.0, 0.0, 0.0])
+            rot = cfg.get("offset_rot", [0.0, 0.0, 0.0])
+            scale = cfg.get("scale", 1.0)
+            default_color = cfg.get("color", "Silver")
             
-            mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInputConnection(reader.GetOutputPort())
+            # Create assembly for this link
+            asm = vtk.vtkAssembly()
+            actors_list = []
             
-            actor = vtk.vtkActor()
-            actor.SetMapper(mapper)
-            
-            # Apply color mapping
-            color_name = self.color_map.get(stl, "Silver")
-            actor.GetProperty().SetColor(colors.GetColor3d(color_name))
+            for stl_item in stl_files:
+                if os.path.isabs(stl_item):
+                    file_path = stl_item
+                else:
+                    file_path = os.path.join(self.stl_dir, stl_item)
+                    
+                if not os.path.exists(file_path):
+                    continue
+                    
+                try:
+                    reader = vtk.vtkSTLReader()
+                    reader.SetFileName(file_path)
+                    reader.Update()
+                    
+                    mapper = vtk.vtkPolyDataMapper()
+                    mapper.SetInputConnection(reader.GetOutputPort())
+                    
+                    actor = vtk.vtkActor()
+                    actor.SetMapper(mapper)
+                    
+                    # Apply color mapping
+                    color_name = self.color_map.get(os.path.basename(file_path), default_color)
+                    try:
+                        actor.GetProperty().SetColor(colors.GetColor3d(color_name))
+                    except Exception:
+                        actor.GetProperty().SetColor(0.75, 0.75, 0.75)
+                        
+                    asm.AddPart(actor)
+                    actors_list.append((actor, file_path))
+                    self.actors[os.path.basename(file_path)] = actor
+                except Exception as e:
+                    print(f"[ERROR] Failed to load STL {file_path}: {e}")
+                    
+            self.link_actors[link_key] = actors_list
             
             base_tf = vtk.vtkTransform()
-            joint_tf = vtk.vtkTransform()
-            comp_tf = vtk.vtkTransform()
+            self._apply_link_base_transform(base_tf, pos, rot, scale)
             
-            # Hardware offsets and alignment parameters from original project
-            if stl == "Link 1-1.STL":
-                base_tf.RotateX(180)
-                base_tf.Translate(0, 0, -87.5)
-            elif stl == "Link 2-1.STL":
-                base_tf.RotateZ(180)
-                base_tf.RotateX(270)
-                base_tf.Translate(-64.15, 77.78, 8.87)
-            elif stl == "Link 3-1.STL":
-                base_tf.RotateZ(180)
-                base_tf.RotateX(180)
-                base_tf.Translate(0, 305, -27.84)
-            elif stl == "Link 4-1.STL":
-                base_tf.RotateY(90)
-                base_tf.RotateX(180)
-                base_tf.Translate(-36.7, 0, -75.94)
-            elif stl == "Link 5-1.STL":
-                base_tf.RotateZ(180)
-                base_tf.RotateY(90)
-                base_tf.Translate(147, 0, 44.88)
-            elif stl == "Link 6-1.STL":
-                base_tf.RotateY(90)
-                base_tf.Translate(43.3, 0, 25)
-                
+            joint_tf = vtk.vtkTransform()
+            joint_tf.Identity()
+            
+            comp_tf = vtk.vtkTransform()
+            comp_tf.Identity()
             comp_tf.Concatenate(base_tf)
             comp_tf.Concatenate(joint_tf)
             
-            asm = vtk.vtkAssembly()
-            asm.AddPart(actor)
             asm.SetUserTransform(comp_tf)
             
-            self.actors[stl] = actor
-            self.assemblies[stl] = asm
-            self.base_transforms[stl] = base_tf
-            self.joint_transforms[stl] = joint_tf
-            self.composite_transforms[stl] = comp_tf
-
-        # Build parenting hierarchy (Kinematic Tree)
-        # Verify assemblies exist before chaining
-        try:
-            root = self.assemblies["Link Base-1.STL"]
-            root.AddPart(self.assemblies["Link Base-2.STL"])
-            self.assemblies["Link Base-2.STL"].AddPart(self.assemblies["Link Base-3.STL"])
-            self.assemblies["Link Base-3.STL"].AddPart(self.assemblies["Link 1-1.STL"])
-            self.assemblies["Link 1-1.STL"].AddPart(self.assemblies["Link 1-2.STL"])
-            self.assemblies["Link 1-2.STL"].AddPart(self.assemblies["Link 2-1.STL"])
-            self.assemblies["Link 2-1.STL"].AddPart(self.assemblies["Link 2-2.STL"])
-            self.assemblies["Link 2-2.STL"].AddPart(self.assemblies["Link 2-3.STL"])
-            self.assemblies["Link 2-3.STL"].AddPart(self.assemblies["Link 3-1.STL"])
-            self.assemblies["Link 3-1.STL"].AddPart(self.assemblies["Link 3-2.STL"])
-            self.assemblies["Link 3-2.STL"].AddPart(self.assemblies["Link 4-1.STL"])
-            self.assemblies["Link 4-1.STL"].AddPart(self.assemblies["Link 4-2.STL"])
-            self.assemblies["Link 4-2.STL"].AddPart(self.assemblies["Link 4-3.STL"])
-            self.assemblies["Link 4-3.STL"].AddPart(self.assemblies["Link 5-1.STL"])
-            self.assemblies["Link 5-1.STL"].AddPart(self.assemblies["Link 5-2.STL"])
-            self.assemblies["Link 5-2.STL"].AddPart(self.assemblies["Link 6-1.STL"])
-            self.assemblies["Link 6-1.STL"].AddPart(self.assemblies["Link 6-2.STL"])
+            self.assemblies[link_key] = asm
+            self.base_transforms[link_key] = base_tf
+            self.joint_transforms[link_key] = joint_tf
+            self.composite_transforms[link_key] = comp_tf
             
-            self.renderer.AddActor(root)
-        except KeyError as e:
-            print(f"[ERROR] Fail to build joint hierarchy. Missing STL component: {e}")
+        # Build hierarchy: Base -> Link 1 -> Link 2 -> Link 3 -> Link 4 -> Link 5 -> Link 6
+        for i in range(len(self.link_keys) - 1):
+            parent_key = self.link_keys[i]
+            child_key = self.link_keys[i + 1]
+            if parent_key in self.assemblies and child_key in self.assemblies:
+                self.assemblies[parent_key].AddPart(self.assemblies[child_key])
+                
+        if "Base" in self.assemblies:
+            self.renderer.AddActor(self.assemblies["Base"])
 
     def _add_floor_grid(self):
         """Adds a standard grid layout on the ground plane (Z=0)."""
@@ -442,23 +543,21 @@ class VTKViewer:
             self.renderer.AddActor(actor)
         else:
             # Map friendly parent name to assembly key
-            target_key = parent
-            if "Link 6-2" in parent or "End-Effector" in parent or "Đầu kẹp" in parent or "Link 6 (End-Effector)" in parent:
-                target_key = "Link 6-2.STL"
-            elif "Link 6-1" in parent:
-                target_key = "Link 6-1.STL"
+            target_key = "Link 6"
+            if "Link 6" in parent or "End-Effector" in parent or "Đầu kẹp" in parent:
+                target_key = "Link 6"
             elif "Link 5" in parent:
-                target_key = "Link 5-2.STL"
+                target_key = "Link 5"
             elif "Link 4" in parent:
-                target_key = "Link 4-3.STL"
+                target_key = "Link 4"
             elif "Link 3" in parent:
-                target_key = "Link 3-2.STL"
+                target_key = "Link 3"
             elif "Link 2" in parent:
-                target_key = "Link 2-3.STL"
+                target_key = "Link 2"
             elif "Link 1" in parent:
-                target_key = "Link 1-2.STL"
+                target_key = "Link 1"
             elif "Base" in parent:
-                target_key = "Link Base-3.STL"
+                target_key = "Base"
                 
             if target_key in self.assemblies:
                 self.assemblies[target_key].AddPart(actor)
