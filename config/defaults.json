@@ -12,9 +12,9 @@
     "J6PosLim": "180",
     "J6NegLim": "180",
     "J7PosLim": 500.0,
-    "J1AngCur": "0.0000",
-    "J2AngCur": "-35.4000",
-    "J3AngCur": "0.0000",
+    "J1AngCur": "-89.2500",
+    "J2AngCur": "-42.0000",
+    "J3AngCur": "50.2375",
     "J4AngCur": "0.0000",
     "J5AngCur": "0.0000",
     "J6AngCur": "-157.5000",
@@ -174,7 +174,7 @@
     "J4\u03b1DHpar": "-90",
     "J5\u03b1DHpar": "90",
     "J6\u03b1DHpar": "-90",
-    "J1dDHpar": "16",
+    "J1dDHpar": "169.77",
     "J2dDHpar": "0",
     "J3dDHpar": "0",
     "J4dDHpar": "222.63",
@@ -239,7 +239,11 @@
     "robot_links": {
         "Base": {
             "name": "Base (Kh\u1edbp \u0111\u1ebf)",
-            "stl_files": [],
+            "stl_files": [
+                "Link Base-1.STL",
+                "Link Base-2.STL",
+                "Link Base-3.STL"
+            ],
             "offset_pos": [
                 0.0,
                 0.0,
@@ -257,34 +261,41 @@
         },
         "Link 1": {
             "name": "Kh\u1edbp 1 (J1)",
-            "stl_files": [],
+            "stl_files": [
+                "Link 1-1.STL",
+                "Link 1-2.STL"
+            ],
             "offset_pos": [
                 0.0,
                 0.0,
-                0.0
+                -87.5
             ],
             "offset_rot": [
-                0.0,
+                180.0,
                 0.0,
                 0.0
             ],
-            "joint_axis": "+Z",
+            "joint_axis": "-Z",
             "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0
         },
         "Link 2": {
             "name": "Kh\u1edbp 2 (J2)",
-            "stl_files": [],
+            "stl_files": [
+                "Link 2-1.STL",
+                "Link 2-2.STL",
+                "Link 2-3.STL"
+            ],
             "offset_pos": [
-                0.0,
-                0.0,
-                0.0
+                -64.15,
+                77.78,
+                8.87
             ],
             "offset_rot": [
+                270.0,
                 0.0,
-                0.0,
-                0.0
+                180.0
             ],
             "joint_axis": "+Z",
             "color": "Silver",
@@ -293,79 +304,92 @@
         },
         "Link 3": {
             "name": "Kh\u1edbp 3 (J3)",
-            "stl_files": [],
+            "stl_files": [
+                "Link 3-1.STL",
+                "Link 3-2.STL"
+            ],
             "offset_pos": [
                 0.0,
-                0.0,
-                0.0
+                305.0,
+                -27.84
             ],
             "offset_rot": [
+                180.0,
                 0.0,
-                0.0,
-                0.0
+                180.0
             ],
-            "joint_axis": "+Y",
+            "joint_axis": "-Z",
             "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0
         },
         "Link 4": {
             "name": "Kh\u1edbp 4 (J4)",
-            "stl_files": [],
+            "stl_files": [
+                "Link 4-1.STL",
+                "Link 4-2.STL",
+                "Link 4-3.STL"
+            ],
             "offset_pos": [
+                -36.7,
                 0.0,
-                0.0,
-                0.0
+                -75.94
             ],
             "offset_rot": [
-                0.0,
-                0.0,
+                180.0,
+                90.0,
                 0.0
             ],
-            "joint_axis": "+Y",
+            "joint_axis": "-Z",
             "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0
         },
         "Link 5": {
             "name": "Kh\u1edbp 5 (J5)",
-            "stl_files": [],
+            "stl_files": [
+                "Link 5-1.STL",
+                "Link 5-2.STL"
+            ],
             "offset_pos": [
+                147.0,
                 0.0,
-                0.0,
-                0.0
+                44.88
             ],
             "offset_rot": [
                 0.0,
-                0.0,
-                0.0
+                90.0,
+                180.0
             ],
-            "joint_axis": "+X",
+            "joint_axis": "-Z",
             "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0
         },
         "Link 6": {
             "name": "Kh\u1edbp 6 (J6)",
-            "stl_files": [],
+            "stl_files": [
+                "Link 6-1.STL",
+                "Link 6-2.STL"
+            ],
             "offset_pos": [
+                43.3,
                 0.0,
-                0.0,
-                0.0
+                25.0
             ],
             "offset_rot": [
                 0.0,
-                0.0,
+                90.0,
                 0.0
             ],
-            "joint_axis": "+Y",
+            "joint_axis": "+Z",
             "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0
         }
     },
-    "current_robot_model": "LAK",
-    "current_robot_model_type": "custom",
+    "current_robot_model": "AR4 Standard (G\u1ed1c)",
+    "current_robot_model_type": "ar4_builtin",
     "saved_robot_models": {
         "LAK": {
             "type": "custom",

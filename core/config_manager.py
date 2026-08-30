@@ -195,7 +195,7 @@ class ConfigManager:
                 "dh": {
                     "J1ΘDHpar": "0", "J2ΘDHpar": "-90", "J3ΘDHpar": "0", "J4ΘDHpar": "0", "J5ΘDHpar": "0", "J6ΘDHpar": "180",
                     "J1αDHpar": "0", "J2αDHpar": "-90", "J3αDHpar": "0", "J4αDHpar": "-90", "J5αDHpar": "90", "J6αDHpar": "-90",
-                    "J1dDHpar": "16", "J2dDHpar": "0", "J3dDHpar": "0", "J4dDHpar": "222.63", "J5dDHpar": "0", "J6dDHpar": "41",
+                    "J1dDHpar": "169.77", "J2dDHpar": "0", "J3dDHpar": "0", "J4dDHpar": "222.63", "J5dDHpar": "0", "J6dDHpar": "41",
                     "J1aDHpar": "0", "J2aDHpar": "64.2", "J3aDHpar": "305", "J4aDHpar": "0", "J5aDHpar": "0", "J6aDHpar": "0"
                 },
                 "links": self.get_robot_links_defaults()
@@ -301,7 +301,7 @@ class ConfigManager:
                     "J4ΘDHpar": "0", "J5ΘDHpar": "0", "J6ΘDHpar": "180",
                     "J1αDHpar": "0", "J2αDHpar": "-90", "J3αDHpar": "0",
                     "J4αDHpar": "-90", "J5αDHpar": "90", "J6αDHpar": "-90",
-                    "J1dDHpar": "16", "J2dDHpar": "0", "J3dDHpar": "0",
+                    "J1dDHpar": "169.77", "J2dDHpar": "0", "J3dDHpar": "0",
                     "J4dDHpar": "222.63", "J5dDHpar": "0", "J6dDHpar": "41",
                     "J1aDHpar": "0", "J2aDHpar": "64.2", "J3aDHpar": "305",
                     "J4aDHpar": "0", "J5aDHpar": "0", "J6aDHpar": "0"
