@@ -23,6 +23,13 @@ class VTKViewer:
         self.base_transforms = {}
         self.joint_transforms = {}
         self.composite_transforms = {}
+        
+        # Per-part actor, transform, and config tracking
+        self.part_actors = {}
+        self.part_transforms = {}
+        self.part_configs = {}
+        
+        # Custom standalone STL objects
         self.custom_objects = {}
         
         # Standard AR4 Color Palette
@@ -199,9 +206,49 @@ class VTKViewer:
                 actor = vtk.vtkActor()
                 actor.SetMapper(mapper)
                 
-                # Apply standard AR4 color mapping
-                color_name = self.color_map.get(stl, "Silver")
-                actor.GetProperty().SetColor(colors.GetColor3d(color_name))
+                # Identify parent link
+                if "Base" in stl:
+                    link_key = "Base"
+                elif "Link 1" in stl:
+                    link_key = "Link 1"
+                elif "Link 2" in stl:
+                    link_key = "Link 2"
+                elif "Link 3" in stl:
+                    link_key = "Link 3"
+                elif "Link 4" in stl:
+                    link_key = "Link 4"
+                elif "Link 5" in stl:
+                    link_key = "Link 5"
+                elif "Link 6" in stl:
+                    link_key = "Link 6"
+                else:
+                    link_key = "Base"
+                    
+                # Read any stored per-part customization from config
+                saved_part_cfg = self.config.get_part_config(link_key, stl)
+                part_color = saved_part_cfg.get("color", self.color_map.get(stl, "Silver"))
+                part_visible = saved_part_cfg.get("visible", True)
+                part_pos = saved_part_cfg.get("pos", [0.0, 0.0, 0.0])
+                part_rot = saved_part_cfg.get("rot", [0.0, 0.0, 0.0])
+                part_scale = saved_part_cfg.get("scale", 1.0)
+                
+                # Apply appearance
+                try:
+                    actor.GetProperty().SetColor(colors.GetColor3d(part_color))
+                except Exception:
+                    actor.GetProperty().SetColor(0.75, 0.75, 0.75)
+                actor.SetVisibility(1 if part_visible else 0)
+                
+                # Individual Part Transform
+                part_tf = vtk.vtkTransform()
+                if part_pos != [0.0, 0.0, 0.0] or part_rot != [0.0, 0.0, 0.0] or part_scale != 1.0:
+                    part_tf.Translate(part_pos[0], part_pos[1], part_pos[2])
+                    part_tf.RotateZ(part_rot[2])
+                    part_tf.RotateY(part_rot[1])
+                    part_tf.RotateX(part_rot[0])
+                    if part_scale != 1.0:
+                        part_tf.Scale(part_scale, part_scale, part_scale)
+                actor.SetUserTransform(part_tf)
                 
                 base_tf = vtk.vtkTransform()
                 joint_tf = vtk.vtkTransform()
@@ -244,21 +291,20 @@ class VTKViewer:
                 self.joint_transforms[stl] = joint_tf
                 self.composite_transforms[stl] = comp_tf
                 
-                # Group into link_actors for UI operations
-                if "Base" in stl:
-                    self.link_actors["Base"].append((actor, file_path))
-                elif "Link 1" in stl:
-                    self.link_actors["Link 1"].append((actor, file_path))
-                elif "Link 2" in stl:
-                    self.link_actors["Link 2"].append((actor, file_path))
-                elif "Link 3" in stl:
-                    self.link_actors["Link 3"].append((actor, file_path))
-                elif "Link 4" in stl:
-                    self.link_actors["Link 4"].append((actor, file_path))
-                elif "Link 5" in stl:
-                    self.link_actors["Link 5"].append((actor, file_path))
-                elif "Link 6" in stl:
-                    self.link_actors["Link 6"].append((actor, file_path))
+                # Track per-part data
+                self.part_actors[stl] = actor
+                self.part_transforms[stl] = part_tf
+                self.part_configs[stl] = {
+                    "pos": part_pos,
+                    "rot": part_rot,
+                    "scale": part_scale,
+                    "color": part_color,
+                    "visible": part_visible,
+                    "file_path": file_path,
+                    "link_key": link_key
+                }
+                
+                self.link_actors[link_key].append((actor, file_path))
                     
             except Exception as e:
                 print(f"[ERROR] Failed to load AR4 STL {stl}: {e}")
@@ -338,6 +384,7 @@ class VTKViewer:
                 if not os.path.exists(file_path):
                     continue
                     
+                stl_name = os.path.basename(file_path)
                 try:
                     reader = vtk.vtkSTLReader()
                     reader.SetFileName(file_path)
@@ -349,16 +396,46 @@ class VTKViewer:
                     actor = vtk.vtkActor()
                     actor.SetMapper(mapper)
                     
-                    # Apply color
-                    color_name = self.color_map.get(os.path.basename(file_path), default_color)
+                    # Read any per-part customization
+                    saved_part_cfg = self.config.get_part_config(link_key, stl_name)
+                    part_color = saved_part_cfg.get("color", self.color_map.get(stl_name, default_color))
+                    part_visible = saved_part_cfg.get("visible", True)
+                    part_pos = saved_part_cfg.get("pos", [0.0, 0.0, 0.0])
+                    part_rot = saved_part_cfg.get("rot", [0.0, 0.0, 0.0])
+                    part_scale = saved_part_cfg.get("scale", 1.0)
+                    
+                    # Apply color & visibility
                     try:
-                        actor.GetProperty().SetColor(colors.GetColor3d(color_name))
+                        actor.GetProperty().SetColor(colors.GetColor3d(part_color))
                     except Exception:
                         actor.GetProperty().SetColor(0.75, 0.75, 0.75)
+                    actor.SetVisibility(1 if part_visible else 0)
+                    
+                    # Per-part sub-transform
+                    part_tf = vtk.vtkTransform()
+                    if part_pos != [0.0, 0.0, 0.0] or part_rot != [0.0, 0.0, 0.0] or part_scale != 1.0:
+                        part_tf.Translate(part_pos[0], part_pos[1], part_pos[2])
+                        part_tf.RotateZ(part_rot[2])
+                        part_tf.RotateY(part_rot[1])
+                        part_tf.RotateX(part_rot[0])
+                        if part_scale != 1.0:
+                            part_tf.Scale(part_scale, part_scale, part_scale)
+                    actor.SetUserTransform(part_tf)
                         
                     asm.AddPart(actor)
                     actors_list.append((actor, file_path))
-                    self.actors[os.path.basename(file_path)] = actor
+                    self.actors[stl_name] = actor
+                    self.part_actors[stl_name] = actor
+                    self.part_transforms[stl_name] = part_tf
+                    self.part_configs[stl_name] = {
+                        "pos": part_pos,
+                        "rot": part_rot,
+                        "scale": part_scale,
+                        "color": part_color,
+                        "visible": part_visible,
+                        "file_path": file_path,
+                        "link_key": link_key
+                    }
                 except Exception as e:
                     print(f"[ERROR] Failed to load custom STL {file_path}: {e}")
                     
@@ -466,6 +543,217 @@ class VTKViewer:
         if self.render_window:
             self.render_window.Render()
 
+    # -------------------------------------------------------------------------
+    # Individual STL Parts Management (Dịch chuyển, Xoay, Xóa, Thêm chi tiết STL)
+    # -------------------------------------------------------------------------
+
+    def get_all_model_stl_parts(self):
+        """Returns a list of dictionaries with information on all STL parts in the active robot model."""
+        parts = []
+        for stl_name, cfg in self.part_configs.items():
+            parts.append({
+                "stl_name": stl_name,
+                "link_key": cfg.get("link_key", "Base"),
+                "file_path": cfg.get("file_path", ""),
+                "pos": list(cfg.get("pos", [0.0, 0.0, 0.0])),
+                "rot": list(cfg.get("rot", [0.0, 0.0, 0.0])),
+                "scale": float(cfg.get("scale", 1.0)),
+                "color": cfg.get("color", "Silver"),
+                "visible": bool(cfg.get("visible", True))
+            })
+        return parts
+
+    def update_part_transform(self, stl_name, pos=None, rot=None, scale=None, render=True):
+        """Updates translation, rotation, and scale for an individual STL part."""
+        base_name = os.path.basename(stl_name)
+        if base_name not in self.part_transforms:
+            return False
+            
+        part_tf = self.part_transforms[base_name]
+        cfg = self.part_configs.get(base_name, {})
+        
+        if pos is not None:
+            cfg["pos"] = [float(p) for p in pos]
+        if rot is not None:
+            cfg["rot"] = [float(r) for r in rot]
+        if scale is not None:
+            cfg["scale"] = float(scale)
+            
+        p = cfg.get("pos", [0.0, 0.0, 0.0])
+        r = cfg.get("rot", [0.0, 0.0, 0.0])
+        s = cfg.get("scale", 1.0)
+        
+        part_tf.Identity()
+        part_tf.Translate(p[0], p[1], p[2])
+        part_tf.RotateZ(r[2])
+        part_tf.RotateY(r[1])
+        part_tf.RotateX(r[0])
+        if s != 1.0:
+            part_tf.Scale(s, s, s)
+            
+        link_key = cfg.get("link_key")
+        if link_key:
+            self.config.update_part_config(link_key, base_name, pos=p, rot=r, scale=s)
+            
+        if render and self.render_window:
+            self.render_window.Render()
+        return True
+
+    def set_part_visibility(self, stl_name, visible, render=True):
+        """Toggles visibility of an individual STL component."""
+        base_name = os.path.basename(stl_name)
+        if base_name in self.part_actors:
+            actor = self.part_actors[base_name]
+            actor.SetVisibility(1 if visible else 0)
+            cfg = self.part_configs.get(base_name, {})
+            cfg["visible"] = bool(visible)
+            link_key = cfg.get("link_key")
+            if link_key:
+                self.config.update_part_config(link_key, base_name, visible=visible)
+            if render and self.render_window:
+                self.render_window.Render()
+            return True
+        return False
+
+    def set_part_color(self, stl_name, color_name, render=True):
+        """Sets the color of an individual STL component."""
+        base_name = os.path.basename(stl_name)
+        if base_name in self.part_actors:
+            actor = self.part_actors[base_name]
+            colors = vtk.vtkNamedColors()
+            try:
+                actor.GetProperty().SetColor(colors.GetColor3d(color_name))
+            except Exception:
+                actor.GetProperty().SetColor(0.75, 0.75, 0.75)
+            cfg = self.part_configs.get(base_name, {})
+            cfg["color"] = color_name
+            link_key = cfg.get("link_key")
+            if link_key:
+                self.config.update_part_config(link_key, base_name, color=color_name)
+            if render and self.render_window:
+                self.render_window.Render()
+            return True
+        return False
+
+    def add_stl_to_link(self, link_key, file_path, pos=None, rot=None, scale=1.0, color="Silver", render=True):
+        """Adds a new STL file to a robot link and updates the 3D pipeline."""
+        if not os.path.exists(file_path):
+            return False
+            
+        stl_name = os.path.basename(file_path)
+        
+        # Persist to config
+        self.config.add_stl_to_link(link_key, file_path)
+        self.config.update_part_config(
+            link_key, 
+            stl_name, 
+            pos=pos or [0.0, 0.0, 0.0], 
+            rot=rot or [0.0, 0.0, 0.0], 
+            scale=scale, 
+            color=color, 
+            visible=True
+        )
+        
+        # Always track in part_configs
+        self.part_configs[stl_name] = {
+            "pos": pos or [0.0, 0.0, 0.0],
+            "rot": rot or [0.0, 0.0, 0.0],
+            "scale": scale,
+            "color": color,
+            "visible": True,
+            "file_path": file_path,
+            "link_key": link_key
+        }
+
+        # Build actor in VTK scene if running
+        if self.vtk_running and self.renderer:
+            try:
+                reader = vtk.vtkSTLReader()
+                reader.SetFileName(file_path)
+                reader.Update()
+                
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputConnection(reader.GetOutputPort())
+                
+                actor = vtk.vtkActor()
+                actor.SetMapper(mapper)
+                
+                colors = vtk.vtkNamedColors()
+                try:
+                    actor.GetProperty().SetColor(colors.GetColor3d(color))
+                except Exception:
+                    actor.GetProperty().SetColor(0.75, 0.75, 0.75)
+                    
+                part_tf = vtk.vtkTransform()
+                if pos or rot or scale != 1.0:
+                    p = pos or [0.0, 0.0, 0.0]
+                    r = rot or [0.0, 0.0, 0.0]
+                    part_tf.Translate(p[0], p[1], p[2])
+                    part_tf.RotateZ(r[2])
+                    part_tf.RotateY(r[1])
+                    part_tf.RotateX(r[0])
+                    if scale != 1.0:
+                        part_tf.Scale(scale, scale, scale)
+                actor.SetUserTransform(part_tf)
+                
+                # Attach to target assembly
+                target_asm = self.assemblies.get(link_key)
+                if target_asm:
+                    target_asm.AddPart(actor)
+                else:
+                    self.renderer.AddActor(actor)
+                    
+                self.actors[stl_name] = actor
+                self.part_actors[stl_name] = actor
+                self.part_transforms[stl_name] = part_tf
+                if link_key not in self.link_actors:
+                    self.link_actors[link_key] = []
+                self.link_actors[link_key].append((actor, file_path))
+                
+                if render and self.render_window:
+                    self.render_window.Render()
+            except Exception as e:
+                print(f"[ERROR] Failed to add STL {file_path} to {link_key}: {e}")
+                return False
+                
+        return True
+
+    def remove_stl_from_link(self, link_key, stl_name, render=True):
+        """Removes an STL file from a robot link and the 3D scene."""
+        base_name = os.path.basename(stl_name)
+        
+        # Persist removal in config
+        self.config.remove_stl_from_link(link_key, stl_name)
+        
+        # Remove from runtime maps
+        actor = self.part_actors.pop(base_name, None) or self.actors.pop(base_name, None)
+        self.part_transforms.pop(base_name, None)
+        self.part_configs.pop(base_name, None)
+        
+        if actor:
+            if link_key in self.assemblies:
+                try:
+                    self.assemblies[link_key].RemovePart(actor)
+                except Exception:
+                    pass
+            if self.renderer:
+                try:
+                    self.renderer.RemoveActor(actor)
+                except Exception:
+                    pass
+                    
+        if link_key in self.link_actors:
+            self.link_actors[link_key] = [(a, f) for a, f in self.link_actors[link_key] if os.path.basename(f) != base_name]
+            
+        if render and self.render_window:
+            self.render_window.Render()
+            
+        return True
+
+    # -------------------------------------------------------------------------
+    # Link Level Controls
+    # -------------------------------------------------------------------------
+
     def update_link_offset(self, link_key, pos=None, rot=None, scale=None, render=True):
         """Live updates base transform (position, rotation, scale) for a robot link."""
         if link_key not in self.base_transforms:
@@ -562,6 +850,9 @@ class VTKViewer:
                 pass
 
         self.actors.clear()
+        self.part_actors.clear()
+        self.part_transforms.clear()
+        self.part_configs.clear()
         self.link_actors.clear()
         self.assemblies.clear()
         self.base_transforms.clear()

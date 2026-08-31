@@ -257,7 +257,24 @@
             "joint_axis": "None",
             "color": "Silver",
             "scale": 1.0,
-            "opacity": 1.0
+            "opacity": 1.0,
+            "part_offsets": {
+                "Link Base-1.STL": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Silver",
+                    "visible": true
+                }
+            }
         },
         "Link 1": {
             "name": "Kh\u1edbp 1 (J1)",
@@ -278,7 +295,24 @@
             "joint_axis": "-Z",
             "color": "Silver",
             "scale": 1.0,
-            "opacity": 1.0
+            "opacity": 1.0,
+            "part_offsets": {
+                "Link 1-1.STL": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Silver",
+                    "visible": false
+                }
+            }
         },
         "Link 2": {
             "name": "Kh\u1edbp 2 (J2)",
@@ -300,7 +334,24 @@
             "joint_axis": "+Z",
             "color": "Silver",
             "scale": 1.0,
-            "opacity": 1.0
+            "opacity": 1.0,
+            "part_offsets": {
+                "Link 2-1.STL": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Gold",
+                    "visible": true
+                }
+            }
         },
         "Link 3": {
             "name": "Kh\u1edbp 3 (J3)",
@@ -385,7 +436,24 @@
             "joint_axis": "+Z",
             "color": "Silver",
             "scale": 1.0,
-            "opacity": 1.0
+            "opacity": 1.0,
+            "part_offsets": {
+                "Link 6-2.STL": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Silver",
+                    "visible": true
+                }
+            }
         }
     },
     "current_robot_model": "AR4 Standard (G\u1ed1c)",

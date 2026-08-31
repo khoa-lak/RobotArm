@@ -46,6 +46,8 @@ class MainWindow(ctk.CTk):
         # 3b. Robot Link Alignment & Calibration State
         self.selected_link_key = "Base"
         self._updating_link_ui = False
+        self.selected_part_name = None
+        self._updating_part_ui = False
         self.link_display_map = {
             "Base (Khớp đế)": "Base",
             "Khớp 1 (J1 - Trục quay Đế)": "Link 1",
@@ -251,6 +253,7 @@ class MainWindow(ctk.CTk):
         self.viewer.launch(self.middle_panel)
         # Apply initial joint rotation values to the VTK assembly
         self.viewer.update_joints(self.joint_angles)
+        self._refresh_part_list_ui()
 
     def _on_serial_feedback(self, data):
         """Callback run when receiving feedback strings from the serial port."""
@@ -722,20 +725,21 @@ class MainWindow(ctk.CTk):
         self._update_coordinates()
         
     # -------------------------------------------------------------------------
-    # Robot Links Alignment & STL Calibration (Căn chỉnh Khớp 3D Robot)
+    # Robot Links Alignment & Individual STL Part Management (Căn chỉnh Khớp & Chi Tiết STL)
     # -------------------------------------------------------------------------
     def _create_robot_links_tab_widgets(self):
-        """Constructs the UI for inspecting, importing, and translating/rotating robot links."""
+        """Constructs the UI for model profiles, individual STL part manipulation, and link kinematics."""
         self.links_scroll_frame = ctk.CTkScrollableFrame(self.tab_links, fg_color="transparent")
         self.links_scroll_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.links_scroll_frame.grid_columnconfigure(0, weight=1)
 
+        # =========================================================================
         # 1. Robot Model Profile Manager
+        # =========================================================================
         preset_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="🤖 Hồ Sơ Mô Hình Robot (Robot Model Profiles)")
         preset_frame.grid(row=0, column=0, padx=5, pady=(2, 6), sticky="ew")
         preset_frame.grid_columnconfigure(0, weight=1)
 
-        # Current active model label
         active_name = self.config.get_active_model_name()
         self.active_model_lbl = ctk.CTkLabel(
             preset_frame,
@@ -746,7 +750,6 @@ class MainWindow(ctk.CTk):
         )
         self.active_model_lbl.grid(row=0, column=0, padx=8, pady=(8, 2), sticky="ew")
 
-        # Model selector dropdown
         model_names = list(self.config.get_saved_models().keys())
         self.preset_menu = ctk.CTkOptionMenu(
             preset_frame,
@@ -756,10 +759,9 @@ class MainWindow(ctk.CTk):
         self.preset_menu.set(active_name)
         self.preset_menu.grid(row=1, column=0, padx=6, pady=(2, 4), sticky="ew")
 
-        # Row of action buttons
         model_btn_row = ctk.CTkFrame(preset_frame, fg_color="transparent")
         model_btn_row.grid(row=2, column=0, padx=6, pady=(0, 4), sticky="ew")
-        model_btn_row.grid_columnconfigure((0, 1), weight=1)
+        model_btn_row.grid_columnconfigure((0, 1, 2), weight=1)
 
         load_btn = ctk.CTkButton(
             model_btn_row,
@@ -790,9 +792,7 @@ class MainWindow(ctk.CTk):
             command=self._on_delete_model
         )
         delete_btn.grid(row=0, column=2, padx=2, pady=2, sticky="ew")
-        model_btn_row.grid_columnconfigure((0, 1, 2), weight=1)
 
-        # Save As new model
         save_as_row = ctk.CTkFrame(preset_frame, fg_color="transparent")
         save_as_row.grid(row=3, column=0, padx=6, pady=(0, 4), sticky="ew")
         save_as_row.grid_columnconfigure(0, weight=1)
@@ -816,7 +816,6 @@ class MainWindow(ctk.CTk):
         )
         save_as_btn.grid(row=0, column=1, sticky="ew")
 
-        # Export / Import row
         io_row = ctk.CTkFrame(preset_frame, fg_color="transparent")
         io_row.grid(row=4, column=0, padx=6, pady=(0, 8), sticky="ew")
         io_row.grid_columnconfigure((0, 1), weight=1)
@@ -843,9 +842,224 @@ class MainWindow(ctk.CTk):
         )
         import_btn.grid(row=0, column=1, padx=2, sticky="ew")
 
-        # 2. Selected Link Selection Frame
-        link_sel_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Khâu / Khớp Đang Chọn (Selected Link)")
-        link_sel_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        # =========================================================================
+        # 2. Individual STL Component Inspector & Controls (Quản lý chi tiết STL)
+        # =========================================================================
+        part_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="🧩 Quản Lý & Tinh Chỉnh Chi Tiết STL (STL Parts)")
+        part_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        part_frame.grid_columnconfigure(0, weight=1)
+
+        # Header: Dropdown to select any STL part in the entire model
+        ctk.CTkLabel(part_frame, text="Chọn chi tiết STL trong Model:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=8, pady=(6, 2), sticky="w")
+        
+        self.part_selector = ctk.CTkOptionMenu(
+            part_frame,
+            values=["(Chưa có chi tiết STL)"],
+            command=self._on_select_part
+        )
+        self.part_selector.grid(row=1, column=0, padx=6, pady=(0, 6), sticky="ew")
+
+        # Action buttons row for selected part: Add STL, Delete STL, Hide/Show, Reset
+        part_btn_box = ctk.CTkFrame(part_frame, fg_color="transparent")
+        part_btn_box.grid(row=2, column=0, padx=6, pady=(0, 6), sticky="ew")
+        part_btn_box.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        self.add_part_btn = ctk.CTkButton(
+            part_btn_box,
+            text="✚ Thêm STL",
+            height=28,
+            font=("Arial", 11),
+            fg_color="#1f538d",
+            hover_color="#14375e",
+            command=self._on_add_stl_to_link
+        )
+        self.add_part_btn.grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+
+        self.del_part_btn = ctk.CTkButton(
+            part_btn_box,
+            text="🗑️ Xóa STL",
+            height=28,
+            font=("Arial", 11),
+            fg_color="#8d1f1f",
+            hover_color="#5e1414",
+            command=self._on_delete_part
+        )
+        self.del_part_btn.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+
+        self.vis_part_btn = ctk.CTkButton(
+            part_btn_box,
+            text="👁️ Ẩn/Hiện",
+            height=28,
+            font=("Arial", 11),
+            fg_color="#555",
+            hover_color="#333",
+            command=self._toggle_part_visibility
+        )
+        self.vis_part_btn.grid(row=0, column=2, padx=2, pady=2, sticky="ew")
+
+        self.reset_part_btn = ctk.CTkButton(
+            part_btn_box,
+            text="🔄 Đặt lại",
+            height=28,
+            font=("Arial", 11),
+            fg_color="#555",
+            hover_color="#333",
+            command=self._reset_selected_part_transform
+        )
+        self.reset_part_btn.grid(row=0, column=3, padx=2, pady=2, sticky="ew")
+
+        # Position Sliders for selected STL part (X, Y, Z mm)
+        part_pos_card = ctk.CTkLabelFrame(part_frame, text="Dịch chuyển Chi tiết (Position Offset - mm)")
+        part_pos_card.grid(row=3, column=0, padx=6, pady=4, sticky="ew")
+        part_pos_card.grid_columnconfigure(0, weight=1)
+
+        self.part_pos_sliders = {}
+        self.part_pos_entries = {}
+
+        pos_axes = [
+            ("X", -1000.0, 1000.0),
+            ("Y", -1000.0, 1000.0),
+            ("Z", -1000.0, 1500.0)
+        ]
+
+        for idx, (axis, min_val, max_val) in enumerate(pos_axes):
+            axis_card = ctk.CTkFrame(part_pos_card, fg_color="#2b2b2b", corner_radius=6)
+            axis_card.grid(row=idx, column=0, padx=4, pady=3, sticky="ew")
+            axis_card.grid_columnconfigure(1, weight=1)
+
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
+            lbl.grid(row=0, column=0, padx=(6, 2), pady=3, sticky="w")
+
+            entry = ctk.CTkEntry(axis_card, width=65, height=24, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.0")
+            entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+            entry.bind("<Return>", lambda e: self._on_part_entry_update())
+            entry.bind("<FocusOut>", lambda e: self._on_part_entry_update())
+            self.part_pos_entries[axis] = entry
+
+            unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=3, sticky="w")
+
+            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
+            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
+
+            for step in [-10, -1, 1, 10]:
+                text = f"{step:+d}" if step > 0 else str(step)
+                btn = ctk.CTkButton(
+                    step_box,
+                    text=text,
+                    width=28,
+                    height=20,
+                    font=("Arial", 9),
+                    command=lambda a=axis, s=step: self._step_part_pos(a, s)
+                )
+                btn.pack(side="left", padx=1)
+
+            slider = ctk.CTkSlider(
+                axis_card,
+                from_=min_val,
+                to=max_val,
+                height=14,
+                command=lambda val, a=axis: self._on_part_pos_slider_move(a, val)
+            )
+            slider.set(0.0)
+            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(1, 4), sticky="ew")
+            self.part_pos_sliders[axis] = slider
+
+        # Rotation Sliders for selected STL part (Rx, Ry, Rz °)
+        part_rot_card = ctk.CTkLabelFrame(part_frame, text="Góc xoay Chi tiết (Rotation - độ °)")
+        part_rot_card.grid(row=4, column=0, padx=6, pady=4, sticky="ew")
+        part_rot_card.grid_columnconfigure(0, weight=1)
+
+        self.part_rot_sliders = {}
+        self.part_rot_entries = {}
+
+        rot_axes = [
+            ("Rx", "Roll (X)"),
+            ("Ry", "Pitch (Y)"),
+            ("Rz", "Yaw (Z)")
+        ]
+
+        for idx, (axis, name) in enumerate(rot_axes):
+            axis_card = ctk.CTkFrame(part_rot_card, fg_color="#2b2b2b", corner_radius=6)
+            axis_card.grid(row=idx, column=0, padx=4, pady=3, sticky="ew")
+            axis_card.grid_columnconfigure(1, weight=1)
+
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
+            lbl.grid(row=0, column=0, padx=(6, 2), pady=3, sticky="w")
+
+            entry = ctk.CTkEntry(axis_card, width=65, height=24, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.0")
+            entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+            entry.bind("<Return>", lambda e: self._on_part_entry_update())
+            entry.bind("<FocusOut>", lambda e: self._on_part_entry_update())
+            self.part_rot_entries[axis] = entry
+
+            unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 11, "bold"), text_color="gray")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=3, sticky="w")
+
+            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
+            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
+
+            for step in [-15, -1, 1, 15]:
+                text = f"{step:+d}°" if step > 0 else f"{step}°"
+                btn = ctk.CTkButton(
+                    step_box,
+                    text=text,
+                    width=30,
+                    height=20,
+                    font=("Arial", 9),
+                    command=lambda a=axis, s=step: self._step_part_rot(a, s)
+                )
+                btn.pack(side="left", padx=1)
+
+            slider = ctk.CTkSlider(
+                axis_card,
+                from_=-180.0,
+                to=180.0,
+                height=14,
+                command=lambda val, a=axis: self._on_part_rot_slider_move(a, val)
+            )
+            slider.set(0.0)
+            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(1, 4), sticky="ew")
+            self.part_rot_sliders[axis] = slider
+
+        # Scale & Color for selected part
+        part_style_card = ctk.CTkFrame(part_frame, fg_color="transparent")
+        part_style_card.grid(row=5, column=0, padx=6, pady=4, sticky="ew")
+        part_style_card.grid_columnconfigure((1, 3), weight=1)
+
+        ctk.CTkLabel(part_style_card, text="Màu sắc:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=4, pady=4, sticky="w")
+        self.part_color_menu = ctk.CTkOptionMenu(
+            part_style_card,
+            values=["Silver", "Orange", "DimGray", "SlateBlue", "LimeGreen", "Gold", "Crimson", "Cyan", "White"],
+            command=self._on_part_color_change
+        )
+        self.part_color_menu.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
+
+        ctk.CTkLabel(part_style_card, text="Tỉ lệ:", font=("Arial", 11, "bold")).grid(row=0, column=2, padx=4, pady=4, sticky="w")
+        scale_box = ctk.CTkFrame(part_style_card, fg_color="transparent")
+        scale_box.grid(row=0, column=3, padx=4, pady=4, sticky="ew")
+        scale_box.grid_columnconfigure(0, weight=1)
+
+        self.part_scale_slider = ctk.CTkSlider(
+            scale_box,
+            from_=0.1,
+            to=5.0,
+            height=14,
+            command=self._on_part_scale_slider_move
+        )
+        self.part_scale_slider.set(1.0)
+        self.part_scale_slider.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+
+        self.part_scale_lbl = ctk.CTkLabel(scale_box, text="1.00x", width=40, font=("Arial", 10, "bold"))
+        self.part_scale_lbl.grid(row=0, column=1, sticky="e")
+
+        # =========================================================================
+        # 3. Link-Level Alignment & Kinematics (Căn chỉnh Khâu / Khớp)
+        # =========================================================================
+        link_sel_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="⚙️ Căn Chỉnh Khâu & Khớp Động Học (Link Kinematics)")
+        link_sel_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
         link_sel_frame.grid_columnconfigure(0, weight=1)
 
         display_options = list(self.link_display_map.keys())
@@ -856,9 +1070,29 @@ class MainWindow(ctk.CTk):
         )
         self.link_selector.grid(row=0, column=0, padx=8, pady=(8, 6), sticky="ew")
 
-        # Action buttons row: Reset & Save
+        # Joint Axis Menu & Reset / Save
+        axis_row = ctk.CTkFrame(link_sel_frame, fg_color="transparent")
+        axis_row.grid(row=1, column=0, padx=6, pady=(0, 4), sticky="ew")
+        axis_row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(axis_row, text="Trục quay khớp:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=4, pady=2, sticky="w")
+        self.link_axis_menu = ctk.CTkOptionMenu(
+            axis_row,
+            values=[
+                "+Z (Quay quanh Z thuận)",
+                "-Z (Quay quanh Z nghịch)",
+                "+Y (Quay quanh Y thuận)",
+                "-Y (Quay quanh Y nghịch)",
+                "+X (Quay quanh X thuận)",
+                "-X (Quay quanh X nghịch)",
+                "None (Cố định)"
+            ],
+            command=self._on_link_axis_change
+        )
+        self.link_axis_menu.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
+
         btn_box = ctk.CTkFrame(link_sel_frame, fg_color="transparent")
-        btn_box.grid(row=1, column=0, padx=6, pady=(0, 8), sticky="ew")
+        btn_box.grid(row=2, column=0, padx=6, pady=(0, 8), sticky="ew")
         btn_box.grid_columnconfigure((0, 1), weight=1)
 
         self.reset_link_btn = ctk.CTkButton(
@@ -879,259 +1113,258 @@ class MainWindow(ctk.CTk):
         )
         self.save_links_btn.grid(row=0, column=1, padx=3, pady=2, sticky="ew")
 
-        # 3. STL File Management Card
-        stl_card = ctk.CTkLabelFrame(self.links_scroll_frame, text="File STL 3D của Khớp (STL Geometry)")
-        stl_card.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
-        stl_card.grid_columnconfigure(0, weight=1)
-
-        self.link_stl_lbl = ctk.CTkLabel(
-            stl_card,
-            text="File STL: Link Base-1.STL",
-            font=("Arial", 11),
-            anchor="w",
-            text_color="#3B8ED0"
-        )
-        self.link_stl_lbl.grid(row=0, column=0, columnspan=2, padx=8, pady=(6, 4), sticky="w")
-
-        browse_stl_btn = ctk.CTkButton(
-            stl_card,
-            text="📁 Đổi File STL cho Khớp này (Browse)",
-            height=32,
-            fg_color="#1f538d",
-            hover_color="#14375e",
-            command=self._on_link_stl_browse
-        )
-        browse_stl_btn.grid(row=1, column=0, columnspan=2, padx=8, pady=(2, 8), sticky="ew")
-
-        # 4. Position Translation Sliders (X, Y, Z mm)
-        pos_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Dịch chuyển Gốc STL (Position Offset - mm)")
-        pos_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
-        pos_frame.grid_columnconfigure(0, weight=1)
-
-        self.link_pos_sliders = {}
-        self.link_pos_entries = {}
-
-        pos_axes = [
-            ("X", -1000.0, 1000.0),
-            ("Y", -1000.0, 1000.0),
-            ("Z", -1000.0, 1500.0)
-        ]
-
-        for idx, (axis, min_val, max_val) in enumerate(pos_axes):
-            axis_card = ctk.CTkFrame(pos_frame, fg_color="#2b2b2b", corner_radius=6)
-            axis_card.grid(row=idx, column=0, padx=6, pady=4, sticky="ew")
-            axis_card.grid_columnconfigure(1, weight=1)
-
-            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
-            lbl.grid(row=0, column=0, padx=(6, 2), pady=4, sticky="w")
-
-            entry = ctk.CTkEntry(axis_card, width=70, height=26, justify="center", font=("Arial", 11, "bold"))
-            entry.insert(0, "0.0")
-            entry.grid(row=0, column=1, padx=2, pady=4, sticky="w")
-            entry.bind("<Return>", lambda e: self._on_link_entry_update())
-            entry.bind("<FocusOut>", lambda e: self._on_link_entry_update())
-            self.link_pos_entries[axis] = entry
-
-            unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray")
-            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=4, sticky="w")
-
-            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
-            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
-
-            for step in [-10, -1, 1, 10]:
-                text = f"{step:+d}" if step > 0 else str(step)
-                btn = ctk.CTkButton(
-                    step_box,
-                    text=text,
-                    width=30,
-                    height=22,
-                    font=("Arial", 9),
-                    command=lambda a=axis, s=step: self._step_link_pos(a, s)
-                )
-                btn.pack(side="left", padx=1)
-
-            slider = ctk.CTkSlider(
-                axis_card,
-                from_=min_val,
-                to=max_val,
-                height=16,
-                command=lambda val, a=axis: self._on_link_pos_slider_move(a, val)
-            )
-            slider.set(0.0)
-            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(2, 6), sticky="ew")
-            self.link_pos_sliders[axis] = slider
-
-        # 5. Rotation Sliders (Rx, Ry, Rz deg)
-        rot_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Góc xoay Ban đầu STL (Rotation - độ °)")
-        rot_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")
-        rot_frame.grid_columnconfigure(0, weight=1)
-
-        self.link_rot_sliders = {}
-        self.link_rot_entries = {}
-
-        rot_axes = [
-            ("Rx", "Roll (X)"),
-            ("Ry", "Pitch (Y)"),
-            ("Rz", "Yaw (Z)")
-        ]
-
-        for idx, (axis, name) in enumerate(rot_axes):
-            axis_card = ctk.CTkFrame(rot_frame, fg_color="#2b2b2b", corner_radius=6)
-            axis_card.grid(row=idx, column=0, padx=6, pady=4, sticky="ew")
-            axis_card.grid_columnconfigure(1, weight=1)
-
-            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
-            lbl.grid(row=0, column=0, padx=(6, 2), pady=4, sticky="w")
-
-            entry = ctk.CTkEntry(axis_card, width=70, height=26, justify="center", font=("Arial", 11, "bold"))
-            entry.insert(0, "0.0")
-            entry.grid(row=0, column=1, padx=2, pady=4, sticky="w")
-            entry.bind("<Return>", lambda e: self._on_link_entry_update())
-            entry.bind("<FocusOut>", lambda e: self._on_link_entry_update())
-            self.link_rot_entries[axis] = entry
-
-            unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 11, "bold"), text_color="gray")
-            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=4, sticky="w")
-
-            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
-            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
-
-            for step in [-15, -1, 1, 15]:
-                text = f"{step:+d}°" if step > 0 else f"{step}°"
-                btn = ctk.CTkButton(
-                    step_box,
-                    text=text,
-                    width=32,
-                    height=22,
-                    font=("Arial", 9),
-                    command=lambda a=axis, s=step: self._step_link_rot(a, s)
-                )
-                btn.pack(side="left", padx=1)
-
-            slider = ctk.CTkSlider(
-                axis_card,
-                from_=-180.0,
-                to=180.0,
-                height=16,
-                command=lambda val, a=axis: self._on_link_rot_slider_move(a, val)
-            )
-            slider.set(0.0)
-            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(2, 6), sticky="ew")
-            self.link_rot_sliders[axis] = slider
-
-        # 6. Joint Axis, Color, Scale Card
-        prop_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="Trục quay & Hiển thị (Joint Axis & Style)")
-        prop_frame.grid(row=5, column=0, padx=5, pady=5, sticky="ew")
-        prop_frame.grid_columnconfigure(1, weight=1)
-
-        # Joint Axis Menu
-        ctk.CTkLabel(prop_frame, text="Trục quay khớp:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=8, pady=5, sticky="w")
-        self.link_axis_menu = ctk.CTkOptionMenu(
-            prop_frame,
-            values=[
-                "+Z (Quay quanh Z thuận)",
-                "-Z (Quay quanh Z nghịch)",
-                "+Y (Quay quanh Y thuận)",
-                "-Y (Quay quanh Y nghịch)",
-                "+X (Quay quanh X thuận)",
-                "-X (Quay quanh X nghịch)",
-                "None (Cố định)"
-            ],
-            command=self._on_link_axis_change
-        )
-        self.link_axis_menu.grid(row=0, column=1, padx=8, pady=5, sticky="ew")
-
-        # Color Menu
-        ctk.CTkLabel(prop_frame, text="Màu sắc:", font=("Arial", 11, "bold")).grid(row=1, column=0, padx=8, pady=5, sticky="w")
-        self.link_color_menu = ctk.CTkOptionMenu(
-            prop_frame,
-            values=["Silver", "Orange", "DimGray", "SlateBlue", "LimeGreen", "Gold", "Crimson", "Cyan", "White"],
-            command=self._on_link_color_change
-        )
-        self.link_color_menu.grid(row=1, column=1, padx=8, pady=5, sticky="ew")
-
-        # Scale Slider
-        ctk.CTkLabel(prop_frame, text="Tỉ lệ (Scale):", font=("Arial", 11, "bold")).grid(row=2, column=0, padx=8, pady=5, sticky="w")
-        s_box = ctk.CTkFrame(prop_frame, fg_color="transparent")
-        s_box.grid(row=2, column=1, padx=8, pady=5, sticky="ew")
-        s_box.grid_columnconfigure(0, weight=1)
-
-        self.link_scale_slider = ctk.CTkSlider(
-            s_box,
-            from_=0.1,
-            to=5.0,
-            height=16,
-            command=self._on_link_scale_slider_move
-        )
-        self.link_scale_slider.set(1.0)
-        self.link_scale_slider.grid(row=0, column=0, padx=(0, 5), sticky="ew")
-
-        self.link_scale_lbl = ctk.CTkLabel(s_box, text="1.00x", width=45, font=("Arial", 11, "bold"))
-        self.link_scale_lbl.grid(row=0, column=1, sticky="e")
-
-        # Load initial values for "Base"
+        # Initial UI Population
+        self._refresh_part_list_ui()
         self._load_selected_link_to_ui()
 
-    def _on_select_link(self, display_name):
-        """Callback when user selects a link in the dropdown."""
-        link_key = self.link_display_map.get(display_name, "Base")
-        self.selected_link_key = link_key
-        self._load_selected_link_to_ui()
+    # -------------------------------------------------------------------------
+    # STL Part Management Event Handlers
+    # -------------------------------------------------------------------------
 
-    def _load_selected_link_to_ui(self):
-        """Populates sliders, entries, and options with the selected link's configuration."""
-        cfg = self.config.get_link_config(self.selected_link_key)
-        self._updating_link_ui = True
+    def _refresh_part_list_ui(self):
+        """Refreshes the dropdown list of all STL parts currently loaded in the model."""
+        parts = self.viewer.get_all_model_stl_parts()
+        if not parts:
+            if hasattr(self, "part_selector"):
+                self.part_selector.configure(values=["(Chưa có chi tiết STL)"])
+                self.part_selector.set("(Chưa có chi tiết STL)")
+            self.selected_part_name = None
+            return
 
-        # Update STL label
-        stl_list = cfg.get("stl_files", [])
-        stl_names = ", ".join([os.path.basename(f) for f in stl_list]) if stl_list else "(Chưa có STL)"
-        self.link_stl_lbl.configure(text=f"File STL: {stl_names}")
+        display_values = [f"[{p['link_key']}] {p['stl_name']}" for p in parts]
+        if hasattr(self, "part_selector"):
+            self.part_selector.configure(values=display_values)
+            
+            # Keep selected or select first
+            if not self.selected_part_name or not any(p["stl_name"] == self.selected_part_name for p in parts):
+                self.selected_part_name = parts[0]["stl_name"]
+                
+            selected_display = next((d for d in display_values if self.selected_part_name in d), display_values[0])
+            self.part_selector.set(selected_display)
+            self._load_selected_part_to_ui()
 
-        # Update Position
-        pos = cfg.get("offset_pos", [0.0, 0.0, 0.0])
+    def _on_select_part(self, display_str):
+        """Callback when user selects an STL part in the dropdown."""
+        if not display_str or "(" in display_str:
+            return
+        # Extract part name and link key
+        try:
+            link_key = display_str.split("] ")[0].replace("[", "").strip()
+            part_name = display_str.split("] ")[1].strip()
+            self.selected_part_name = part_name
+            self.selected_link_key = link_key
+            if hasattr(self, "link_selector") and link_key in self.link_key_to_display:
+                self.link_selector.set(self.link_key_to_display[link_key])
+            self._load_selected_part_to_ui()
+            self._load_selected_link_to_ui()
+        except Exception:
+            pass
+
+    def _load_selected_part_to_ui(self):
+        """Populates sliders and entries with the selected STL part's configuration."""
+        if not self.selected_part_name:
+            return
+            
+        cfg = self.viewer.part_configs.get(self.selected_part_name)
+        if not cfg:
+            cfg = self.config.get_part_config(self.selected_link_key, self.selected_part_name)
+            
+        self._updating_part_ui = True
+        
+        # Position
+        pos = cfg.get("pos", [0.0, 0.0, 0.0])
         for idx, axis in enumerate(["X", "Y", "Z"]):
             val = pos[idx]
-            self.link_pos_entries[axis].delete(0, "end")
-            self.link_pos_entries[axis].insert(0, f"{val:.2f}")
-            if axis in ["X", "Y"]:
-                self.link_pos_sliders[axis].set(max(-1000.0, min(1000.0, val)))
-            else:
-                self.link_pos_sliders[axis].set(max(-1000.0, min(1500.0, val)))
-
-        # Update Rotation
-        rot = cfg.get("offset_rot", [0.0, 0.0, 0.0])
+            if axis in self.part_pos_entries:
+                self.part_pos_entries[axis].delete(0, "end")
+                self.part_pos_entries[axis].insert(0, f"{val:.2f}")
+            if axis in self.part_pos_sliders:
+                if axis in ["X", "Y"]:
+                    self.part_pos_sliders[axis].set(max(-1000.0, min(1000.0, val)))
+                else:
+                    self.part_pos_sliders[axis].set(max(-1000.0, min(1500.0, val)))
+                    
+        # Rotation
+        rot = cfg.get("rot", [0.0, 0.0, 0.0])
         for idx, axis in enumerate(["Rx", "Ry", "Rz"]):
             val = rot[idx]
-            self.link_rot_entries[axis].delete(0, "end")
-            self.link_rot_entries[axis].insert(0, f"{val:.2f}")
-            self.link_rot_sliders[axis].set(max(-180.0, min(180.0, val)))
-
-        # Update Axis
-        axis_raw = cfg.get("joint_axis", "None" if self.selected_link_key == "Base" else "+Z")
-        for val in self.link_axis_menu._values:
-            if val.startswith(axis_raw):
-                self.link_axis_menu.set(val)
-                break
-        else:
-            self.link_axis_menu.set("+Z (Quay quanh Z thuận)")
-
-        # Update Color
-        color = cfg.get("color", "Silver")
-        self.link_color_menu.set(color)
-
-        # Update Scale
+            if axis in self.part_rot_entries:
+                self.part_rot_entries[axis].delete(0, "end")
+                self.part_rot_entries[axis].insert(0, f"{val:.2f}")
+            if axis in self.part_rot_sliders:
+                self.part_rot_sliders[axis].set(max(-180.0, min(180.0, val)))
+                
+        # Scale
         scale = cfg.get("scale", 1.0)
-        self.link_scale_slider.set(scale)
-        self.link_scale_lbl.configure(text=f"{scale:.2f}x")
+        if hasattr(self, "part_scale_slider"):
+            self.part_scale_slider.set(scale)
+        if hasattr(self, "part_scale_lbl"):
+            self.part_scale_lbl.configure(text=f"{scale:.2f}x")
+            
+        # Color
+        color = cfg.get("color", "Silver")
+        if hasattr(self, "part_color_menu"):
+            self.part_color_menu.set(color)
+            
+        # Visibility button text
+        vis = cfg.get("visible", True)
+        if hasattr(self, "vis_part_btn"):
+            self.vis_part_btn.configure(text="👁️ Ẩn" if vis else "👁️ Hiện")
+            
+        self._updating_part_ui = False
 
-        self._updating_link_ui = False
+    def _on_part_pos_slider_move(self, axis, val):
+        """Callback when STL part position slider moves."""
+        if self._updating_part_ui or not self.selected_part_name:
+            return
+        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
+        pos = list(cfg.get("pos", [0.0, 0.0, 0.0]))
+        pos[axis_idx] = float(val)
 
-    def _on_link_stl_browse(self):
-        """Opens file dialog to choose an STL file for the current link."""
+        self._updating_part_ui = True
+        if axis in self.part_pos_entries:
+            self.part_pos_entries[axis].delete(0, "end")
+            self.part_pos_entries[axis].insert(0, f"{val:.2f}")
+        self._updating_part_ui = False
+
+        self.viewer.update_part_transform(self.selected_part_name, pos=pos)
+
+    def _on_part_rot_slider_move(self, axis, val):
+        """Callback when STL part rotation slider moves."""
+        if self._updating_part_ui or not self.selected_part_name:
+            return
+        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
+        rot = list(cfg.get("rot", [0.0, 0.0, 0.0]))
+        rot[axis_idx] = float(val)
+
+        self._updating_part_ui = True
+        if axis in self.part_rot_entries:
+            self.part_rot_entries[axis].delete(0, "end")
+            self.part_rot_entries[axis].insert(0, f"{val:.2f}")
+        self._updating_part_ui = False
+
+        self.viewer.update_part_transform(self.selected_part_name, rot=rot)
+
+    def _on_part_entry_update(self):
+        """Callback when user edits numeric entries for the STL part."""
+        if self._updating_part_ui or not self.selected_part_name:
+            return
+        try:
+            x = float(self.part_pos_entries["X"].get().strip())
+            y = float(self.part_pos_entries["Y"].get().strip())
+            z = float(self.part_pos_entries["Z"].get().strip())
+            rx = float(self.part_rot_entries["Rx"].get().strip())
+            ry = float(self.part_rot_entries["Ry"].get().strip())
+            rz = float(self.part_rot_entries["Rz"].get().strip())
+        except ValueError:
+            return
+
+        self._updating_part_ui = True
+        self.part_pos_sliders["X"].set(max(-1000.0, min(1000.0, x)))
+        self.part_pos_sliders["Y"].set(max(-1000.0, min(1000.0, y)))
+        self.part_pos_sliders["Z"].set(max(-1000.0, min(1500.0, z)))
+        self.part_rot_sliders["Rx"].set(max(-180.0, min(180.0, rx)))
+        self.part_rot_sliders["Ry"].set(max(-180.0, min(180.0, ry)))
+        self.part_rot_sliders["Rz"].set(max(-180.0, min(180.0, rz)))
+        self._updating_part_ui = False
+
+        self.viewer.update_part_transform(
+            self.selected_part_name,
+            pos=[x, y, z],
+            rot=[rx, ry, rz]
+        )
+
+    def _step_part_pos(self, axis, delta):
+        """Steps STL part position by fixed offset."""
+        if not self.selected_part_name:
+            return
+        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
+        pos = list(cfg.get("pos", [0.0, 0.0, 0.0]))
+        pos[axis_idx] += float(delta)
+
+        self._updating_part_ui = True
+        if axis in self.part_pos_entries:
+            self.part_pos_entries[axis].delete(0, "end")
+            self.part_pos_entries[axis].insert(0, f"{pos[axis_idx]:.2f}")
+        if axis in self.part_pos_sliders:
+            if axis in ["X", "Y"]:
+                self.part_pos_sliders[axis].set(max(-1000.0, min(1000.0, pos[axis_idx])))
+            else:
+                self.part_pos_sliders[axis].set(max(-1000.0, min(1500.0, pos[axis_idx])))
+        self._updating_part_ui = False
+
+        self.viewer.update_part_transform(self.selected_part_name, pos=pos)
+
+    def _step_part_rot(self, axis, delta):
+        """Steps STL part rotation angle by fixed step."""
+        if not self.selected_part_name:
+            return
+        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
+        rot = list(cfg.get("rot", [0.0, 0.0, 0.0]))
+        new_val = rot[axis_idx] + float(delta)
+        while new_val > 180.0:
+            new_val -= 360.0
+        while new_val < -180.0:
+            new_val += 360.0
+        rot[axis_idx] = new_val
+
+        self._updating_part_ui = True
+        if axis in self.part_rot_entries:
+            self.part_rot_entries[axis].delete(0, "end")
+            self.part_rot_entries[axis].insert(0, f"{new_val:.2f}")
+        if axis in self.part_rot_sliders:
+            self.part_rot_sliders[axis].set(new_val)
+        self._updating_part_ui = False
+
+        self.viewer.update_part_transform(self.selected_part_name, rot=rot)
+
+    def _on_part_scale_slider_move(self, val):
+        """Callback when STL part scale slider moves."""
+        if self._updating_part_ui or not self.selected_part_name:
+            return
+        s_val = float(val)
+        if hasattr(self, "part_scale_lbl"):
+            self.part_scale_lbl.configure(text=f"{s_val:.2f}x")
+        self.viewer.update_part_transform(self.selected_part_name, scale=s_val)
+
+    def _on_part_color_change(self, color_val):
+        """Callback when STL part color changes."""
+        if not self.selected_part_name:
+            return
+        self.viewer.set_part_color(self.selected_part_name, color_val)
+
+    def _toggle_part_visibility(self):
+        """Toggles visibility of the selected STL part."""
+        if not self.selected_part_name:
+            return
+        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        cur_vis = cfg.get("visible", True)
+        new_vis = not cur_vis
+        self.viewer.set_part_visibility(self.selected_part_name, new_vis)
+        if hasattr(self, "vis_part_btn"):
+            self.vis_part_btn.configure(text="👁️ Ẩn" if new_vis else "👁️ Hiện")
+
+    def _reset_selected_part_transform(self):
+        """Resets the position and rotation of the selected STL part to (0,0,0) and scale=1."""
+        if not self.selected_part_name:
+            return
+        self.viewer.update_part_transform(
+            self.selected_part_name,
+            pos=[0.0, 0.0, 0.0],
+            rot=[0.0, 0.0, 0.0],
+            scale=1.0
+        )
+        self._load_selected_part_to_ui()
+
+    def _on_add_stl_to_link(self):
+        """Opens file dialog to choose an STL file and adds it to the current link."""
         from tkinter import filedialog, messagebox
         file_path = filedialog.askopenfilename(
-            title=f"Chọn file STL cho {self.selected_link_key}",
+            title=f"Chọn file STL thêm vào {self.selected_link_key}",
             filetypes=[("STL 3D Model", "*.stl *.STL"), ("All Files", "*.*")]
         )
         if not file_path:
@@ -1140,125 +1373,70 @@ class MainWindow(ctk.CTk):
             messagebox.showerror("Lỗi", f"Không tìm thấy file: {file_path}")
             return
             
-        self.viewer.update_link_stl(self.selected_link_key, [file_path])
-        self._load_selected_link_to_ui()
-        messagebox.showinfo("Thành công", f"Đã nạp file STL '{os.path.basename(file_path)}' cho {self.selected_link_key}!")
-
-    def _on_link_pos_slider_move(self, axis, val):
-        """Callback when link position slider moves."""
-        if self._updating_link_ui:
-            return
-        cfg = self.config.get_link_config(self.selected_link_key)
-        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
-        pos = list(cfg.get("offset_pos", [0.0, 0.0, 0.0]))
-        pos[axis_idx] = float(val)
-
-        self._updating_link_ui = True
-        self.link_pos_entries[axis].delete(0, "end")
-        self.link_pos_entries[axis].insert(0, f"{val:.2f}")
-        self._updating_link_ui = False
-
-        self.viewer.update_link_offset(self.selected_link_key, pos=pos)
-
-    def _on_link_rot_slider_move(self, axis, val):
-        """Callback when link rotation slider moves."""
-        if self._updating_link_ui:
-            return
-        cfg = self.config.get_link_config(self.selected_link_key)
-        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
-        rot = list(cfg.get("offset_rot", [0.0, 0.0, 0.0]))
-        rot[axis_idx] = float(val)
-
-        self._updating_link_ui = True
-        self.link_rot_entries[axis].delete(0, "end")
-        self.link_rot_entries[axis].insert(0, f"{val:.2f}")
-        self._updating_link_ui = False
-
-        self.viewer.update_link_offset(self.selected_link_key, rot=rot)
-
-    def _on_link_entry_update(self):
-        """Callback when user edits numeric entries for the link."""
-        if self._updating_link_ui:
-            return
-        try:
-            x = float(self.link_pos_entries["X"].get().strip())
-            y = float(self.link_pos_entries["Y"].get().strip())
-            z = float(self.link_pos_entries["Z"].get().strip())
-            rx = float(self.link_rot_entries["Rx"].get().strip())
-            ry = float(self.link_rot_entries["Ry"].get().strip())
-            rz = float(self.link_rot_entries["Rz"].get().strip())
-        except ValueError:
-            return
-
-        self._updating_link_ui = True
-        self.link_pos_sliders["X"].set(max(-1000.0, min(1000.0, x)))
-        self.link_pos_sliders["Y"].set(max(-1000.0, min(1000.0, y)))
-        self.link_pos_sliders["Z"].set(max(-1000.0, min(1500.0, z)))
-        self.link_rot_sliders["Rx"].set(max(-180.0, min(180.0, rx)))
-        self.link_rot_sliders["Ry"].set(max(-180.0, min(180.0, ry)))
-        self.link_rot_sliders["Rz"].set(max(-180.0, min(180.0, rz)))
-        self._updating_link_ui = False
-
-        self.viewer.update_link_offset(
-            self.selected_link_key,
-            pos=[x, y, z],
-            rot=[rx, ry, rz]
-        )
-
-    def _step_link_pos(self, axis, delta):
-        """Steps position by fixed offset."""
-        cfg = self.config.get_link_config(self.selected_link_key)
-        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
-        pos = list(cfg.get("offset_pos", [0.0, 0.0, 0.0]))
-        pos[axis_idx] += float(delta)
-
-        self._updating_link_ui = True
-        self.link_pos_entries[axis].delete(0, "end")
-        self.link_pos_entries[axis].insert(0, f"{pos[axis_idx]:.2f}")
-        if axis in ["X", "Y"]:
-            self.link_pos_sliders[axis].set(max(-1000.0, min(1000.0, pos[axis_idx])))
+        success = self.viewer.add_stl_to_link(self.selected_link_key, file_path)
+        if success:
+            self.selected_part_name = os.path.basename(file_path)
+            self._refresh_part_list_ui()
+            self._load_selected_link_to_ui()
+            messagebox.showinfo("Thành công", f"Đã thêm chi tiết '{os.path.basename(file_path)}' vào {self.selected_link_key}!")
         else:
-            self.link_pos_sliders[axis].set(max(-1000.0, min(1500.0, pos[axis_idx])))
-        self._updating_link_ui = False
+            messagebox.showerror("Lỗi", "Không thể nạp file STL!")
 
-        self.viewer.update_link_offset(self.selected_link_key, pos=pos)
+    def _on_delete_part(self):
+        """Deletes the currently selected STL part from its parent link."""
+        if not self.selected_part_name:
+            return
+        from tkinter import messagebox
+        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        link_key = cfg.get("link_key", self.selected_link_key)
+        
+        ok = messagebox.askyesno(
+            "Xác nhận xóa",
+            f"Bạn có chắc muốn xóa chi tiết '{self.selected_part_name}' khỏi {link_key}?"
+        )
+        if not ok:
+            return
+            
+        success = self.viewer.remove_stl_from_link(link_key, self.selected_part_name)
+        if success:
+            self.selected_part_name = None
+            self._refresh_part_list_ui()
+            self._load_selected_link_to_ui()
+            messagebox.showinfo("Thành công", "Đã xóa chi tiết STL khỏi model!")
+        else:
+            messagebox.showerror("Lỗi", "Không thể xóa chi tiết STL!")
 
-    def _step_link_rot(self, axis, delta):
-        """Steps rotation angle by fixed step."""
+    # -------------------------------------------------------------------------
+    # Link Level Event Handlers
+    # -------------------------------------------------------------------------
+
+    def _on_select_link(self, display_name):
+        """Callback when user selects a link in the dropdown."""
+        link_key = self.link_display_map.get(display_name, "Base")
+        self.selected_link_key = link_key
+        self._load_selected_link_to_ui()
+
+    def _load_selected_link_to_ui(self):
+        """Populates link controls with the selected link's configuration."""
         cfg = self.config.get_link_config(self.selected_link_key)
-        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
-        rot = list(cfg.get("offset_rot", [0.0, 0.0, 0.0]))
-        new_val = rot[axis_idx] + float(delta)
-        while new_val > 180.0:
-            new_val -= 360.0
-        while new_val < -180.0:
-            new_val += 360.0
-        rot[axis_idx] = new_val
-
         self._updating_link_ui = True
-        self.link_rot_entries[axis].delete(0, "end")
-        self.link_rot_entries[axis].insert(0, f"{new_val:.2f}")
-        self.link_rot_sliders[axis].set(new_val)
-        self._updating_link_ui = False
 
-        self.viewer.update_link_offset(self.selected_link_key, rot=rot)
+        # Update Axis
+        axis_raw = cfg.get("joint_axis", "None" if self.selected_link_key == "Base" else "+Z")
+        if hasattr(self, "link_axis_menu"):
+            for val in self.link_axis_menu._values:
+                if val.startswith(axis_raw):
+                    self.link_axis_menu.set(val)
+                    break
+            else:
+                self.link_axis_menu.set("+Z (Quay quanh Z thuận)")
+
+        self._updating_link_ui = False
 
     def _on_link_axis_change(self, axis_val):
         """Callback when user changes joint axis."""
         axis_code = axis_val.split()[0] if axis_val else "+Z"
         self.viewer.update_link_joint_axis(self.selected_link_key, axis_code)
-
-    def _on_link_color_change(self, color_val):
-        """Callback when user changes link color."""
-        self.viewer.update_link_color(self.selected_link_key, color_val)
-
-    def _on_link_scale_slider_move(self, val):
-        """Callback when user moves link scale slider."""
-        if self._updating_link_ui:
-            return
-        s_val = float(val)
-        self.link_scale_lbl.configure(text=f"{s_val:.2f}x")
-        self.viewer.update_link_offset(self.selected_link_key, scale=s_val)
 
     def _save_robot_links_config(self):
         """Persists current robot links configuration to defaults.json."""
@@ -1339,6 +1517,7 @@ class MainWindow(ctk.CTk):
 
         # Reset UI
         self._refresh_model_list_ui()
+        self._refresh_part_list_ui()
         self._load_selected_link_to_ui()
         self._reload_dh_entries_from_config()
         self._update_coordinates()
@@ -1347,10 +1526,10 @@ class MainWindow(ctk.CTk):
             "Tạo Model Mới",
             f"Đã tạo model trống '{name}'.\n\n"
             "Bây giờ hãy:\n"
-            "1. Chọn từng Khớp 1→6 bên dưới\n"
-            "2. Bấm '📁 Đổi File STL' để gắn file STL\n"
-            "3. Kéo slider để căn chỉnh vị trí/góc xoay\n"
-            "4. Nhập tên và bấm '💾 Lưu Mới' để lưu lại"
+            "1. Chọn từng Khớp bên dưới\n"
+            "2. Bấm '✚ Thêm STL' để nạp file STL vào khớp\n"
+            "3. Kéo slider để căn chỉnh vị trí/góc xoay từng chi tiết\n"
+            "4. Bấm '💾 Lưu Mới' để lưu lại hồ sơ model"
         )
 
     def _on_load_model(self):
@@ -1363,6 +1542,7 @@ class MainWindow(ctk.CTk):
         if self.config.load_robot_model(name):
             self.kinematics.initialize_kinematics()
             self.viewer.reload_robot()
+            self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
             self._reload_dh_entries_from_config()
             self._update_coordinates()
@@ -1406,6 +1586,7 @@ class MainWindow(ctk.CTk):
         if success:
             self._refresh_model_list_ui()
             self.viewer.reload_robot()
+            self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
             self._reload_dh_entries_from_config()
         messagebox.showinfo("Kết quả", msg)
@@ -1442,6 +1623,7 @@ class MainWindow(ctk.CTk):
         success, result = self.config.import_model_from_json(file_path)
         if success:
             self._refresh_model_list_ui()
+            self._refresh_part_list_ui()
             messagebox.showinfo("Thành công", f"Đã nhập model '{result}' thành công!")
         else:
             messagebox.showerror("Lỗi", result)
@@ -1452,6 +1634,7 @@ class MainWindow(ctk.CTk):
         if self.config.load_robot_model(preset_name):
             self.kinematics.initialize_kinematics()
             self.viewer.reload_robot()
+            self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
             self._reload_dh_entries_from_config()
             self._update_coordinates()

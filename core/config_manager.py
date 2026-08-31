@@ -188,6 +188,68 @@ class ConfigManager:
         links[link_key] = link_data
         self.save_robot_links(links)
 
+    def add_stl_to_link(self, link_key, file_path):
+        """Adds an STL file to a robot link if not already present."""
+        cfg = self.get_link_config(link_key)
+        stl_files = list(cfg.get("stl_files", []))
+        if file_path not in stl_files:
+            stl_files.append(file_path)
+            cfg["stl_files"] = stl_files
+            self.set_link_config(link_key, cfg)
+        return stl_files
+
+    def remove_stl_from_link(self, link_key, stl_identifier):
+        """Removes an STL file from a robot link."""
+        cfg = self.get_link_config(link_key)
+        stl_files = list(cfg.get("stl_files", []))
+        
+        # Match by full path or basename
+        new_list = [f for f in stl_files if f != stl_identifier and os.path.basename(f) != os.path.basename(stl_identifier)]
+        if len(new_list) != len(stl_files):
+            cfg["stl_files"] = new_list
+            if "part_offsets" in cfg and os.path.basename(stl_identifier) in cfg["part_offsets"]:
+                del cfg["part_offsets"][os.path.basename(stl_identifier)]
+            self.set_link_config(link_key, cfg)
+            return True
+        return False
+
+    def get_part_config(self, link_key, stl_name):
+        """Retrieves individual configuration/offset for a specific STL component."""
+        cfg = self.get_link_config(link_key)
+        part_offsets = cfg.get("part_offsets", {})
+        base_name = os.path.basename(stl_name)
+        return part_offsets.get(base_name, {
+            "pos": [0.0, 0.0, 0.0],
+            "rot": [0.0, 0.0, 0.0],
+            "scale": 1.0,
+            "color": cfg.get("color", "Silver"),
+            "visible": True
+        })
+
+    def update_part_config(self, link_key, stl_name, pos=None, rot=None, scale=None, color=None, visible=None):
+        """Updates individual configuration/offset for a specific STL component."""
+        cfg = self.get_link_config(link_key)
+        if "part_offsets" not in cfg or not isinstance(cfg["part_offsets"], dict):
+            cfg["part_offsets"] = {}
+            
+        base_name = os.path.basename(stl_name)
+        part_cfg = self.get_part_config(link_key, base_name)
+        
+        if pos is not None:
+            part_cfg["pos"] = [float(p) for p in pos]
+        if rot is not None:
+            part_cfg["rot"] = [float(r) for r in rot]
+        if scale is not None:
+            part_cfg["scale"] = float(scale)
+        if color is not None:
+            part_cfg["color"] = color
+        if visible is not None:
+            part_cfg["visible"] = bool(visible)
+            
+        cfg["part_offsets"][base_name] = part_cfg
+        self.set_link_config(link_key, cfg)
+        return part_cfg
+
     def get_presets(self):
         """Returns built-in presets for robot kinematics and 3D links."""
         return {
