@@ -187,6 +187,7 @@ class ConfigManager:
         links = self.get_robot_links()
         links[link_key] = link_data
         self.save_robot_links(links)
+        self.sync_active_model_data()
 
     def add_stl_to_link(self, link_key, file_path):
         """Adds an STL file to a robot link if not already present."""
@@ -376,7 +377,8 @@ class ConfigManager:
                     "J5PosLim": "105", "J5NegLim": "105",
                     "J6PosLim": "180", "J6NegLim": "180"
                 },
-                "links": self.get_robot_links_defaults()
+                "links": self.get_robot_links_defaults(),
+                "custom_stl_objects": []
             },
             "Cơ cấu Mới (141.5-40-165-132-58)": {
                 "type": "custom",
@@ -421,7 +423,8 @@ class ConfigManager:
                     "Link 6": {"name": "Khớp 6 (J6)", "stl_files": ["Link 6-1.STL"],
                                "offset_pos": [0.0, 58.0, 0.0], "offset_rot": [0.0, 0.0, 0.0],
                                "joint_axis": "+Y", "color": "Orange", "scale": 1.0, "opacity": 1.0}
-                }
+                },
+                "custom_stl_objects": []
             }
         }
 
@@ -471,11 +474,14 @@ class ConfigManager:
         if "links" in model:
             self.config_data["robot_links"] = model["links"]
 
+        # 4. Apply custom_stl_objects for this specific model profile
+        self.config_data["custom_stl_objects"] = list(model.get("custom_stl_objects", []))
+
         self.save_config()
         return True
 
     def save_current_as_model(self, model_name, description=""):
-        """Saves current state (DH params, limits, links) as a named robot model."""
+        """Saves current state (DH params, limits, links, custom objects) as a named robot model."""
         if not model_name:
             return False
 
@@ -496,7 +502,8 @@ class ConfigManager:
             "description": description,
             "dh_parameters": dh_params,
             "joint_limits": joint_limits,
-            "links": self.get_robot_links()
+            "links": self.get_robot_links(),
+            "custom_stl_objects": list(self.get("custom_stl_objects", []))
         }
 
         saved_models = self.get("saved_robot_models", {})
@@ -508,6 +515,29 @@ class ConfigManager:
         self.config_data["current_robot_model_type"] = "custom"
         self.save_config()
         return True
+
+    def sync_active_model_data(self):
+        """Synchronizes current changes back into saved_robot_models if active model is custom."""
+        active_name = self.get_active_model_name()
+        if active_name in self.get_builtin_models():
+            return
+        saved_models = self.get("saved_robot_models", {})
+        if not isinstance(saved_models, dict):
+            saved_models = {}
+        if active_name in saved_models:
+            saved_models[active_name]["links"] = self.get_robot_links()
+            saved_models[active_name]["custom_stl_objects"] = list(self.get("custom_stl_objects", []))
+            
+            # Sync active DH parameters
+            dh_params = {}
+            for j in range(1, 7):
+                for p in ["Θ", "α", "d", "a"]:
+                    k = f"J{j}{p}DHpar"
+                    dh_params[k] = str(self.get(k, "0.0"))
+            saved_models[active_name]["dh_parameters"] = dh_params
+
+            self.config_data["saved_robot_models"] = saved_models
+            self.save_config()
 
     def delete_saved_model(self, model_name):
         """Deletes a custom saved model (cannot delete built-in models)."""

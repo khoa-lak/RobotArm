@@ -2,6 +2,58 @@ import os
 import sys
 import vtk
 
+class RobotInteractorStyle(vtk.vtkInteractorStyleTrackballCamera):
+    """Custom trackball interactor style that enables safe 3D mesh picking on left click without recursive event loop."""
+    def __init__(self, viewer):
+        super().__init__()
+        self.viewer = viewer
+        self.picker = vtk.vtkCellPicker()
+        self.picker.SetTolerance(0.002)
+
+    def OnLeftButtonDown(self):
+        try:
+            ren = self.GetDefaultRenderer() or self.viewer.renderer
+            if ren and self.GetInteractor():
+                pos = self.GetInteractor().GetEventPosition()
+                if self.picker.Pick(pos[0], pos[1], 0, ren):
+                    path = self.picker.GetPath()
+                    picked_part_name = None
+                    picked_obj_id = None
+                    
+                    if path:
+                        # Search backwards from leaf node to identify the clicked actor
+                        for i in range(path.GetNumberOfItems() - 1, -1, -1):
+                            prop = path.GetItemAsObject(i).GetViewProp()
+                            if prop == self.viewer.highlight_actor:
+                                continue
+                            for stl_name, act in self.viewer.part_actors.items():
+                                if act == prop:
+                                    picked_part_name = stl_name
+                                    break
+                            if picked_part_name:
+                                break
+                                
+                            for obj_id, obj_data in self.viewer.custom_objects.items():
+                                if obj_data.get("actor") == prop:
+                                    picked_obj_id = obj_id
+                                    break
+                            if picked_obj_id:
+                                break
+                                
+                    if picked_part_name:
+                        self.viewer.highlight_part(picked_part_name)
+                        if self.viewer.on_part_picked_cb:
+                            self.viewer.on_part_picked_cb(picked_part_name)
+                    elif picked_obj_id:
+                        if self.viewer.on_object_picked_cb:
+                            self.viewer.on_object_picked_cb(picked_obj_id)
+        except Exception as e:
+            print(f"[ERROR] 3D Pick Exception: {e}")
+
+        # Call C++ base class method directly without recursive Python event triggering
+        vtk.vtkInteractorStyleTrackballCamera.OnLeftButtonDown(self)
+
+
 class VTKViewer:
     def __init__(self, root_widget, config_manager):
         self.root = root_widget
@@ -56,6 +108,13 @@ class VTKViewer:
         # Default Path to STL files
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.stl_dir = os.path.join(base_dir, "assets", "robot_model")
+        
+        # 3D Picker & Selection Highlight Callbacks
+        self.on_part_picked_cb = None
+        self.on_object_picked_cb = None
+        self.highlight_actor = None
+        self.highlight_link_key = None
+        self.selected_part_name = None
 
     def launch(self, parent_widget):
         """Launches the VTK render window embedded in the parent Tkinter widget using Win32 SetParent."""
@@ -74,10 +133,11 @@ class VTKViewer:
         self.render_window.AddRenderer(self.renderer)
         self.render_window.BordersOff()
         
-        # 2. Setup standard Interactor
+        # 2. Setup standard Interactor with custom RobotInteractorStyle
         self.interactor = vtk.vtkRenderWindowInteractor()
         self.interactor.SetRenderWindow(self.render_window)
-        style = vtk.vtkInteractorStyleTrackballCamera()
+        style = RobotInteractorStyle(self)
+        style.SetDefaultRenderer(self.renderer)
         self.interactor.SetInteractorStyle(style)
         
         self.renderer.SetBackground(vtk.vtkNamedColors().GetColor3d("LightSlateGray"))
@@ -480,15 +540,97 @@ class VTKViewer:
             s = float(scale)
             base_tf.Scale(s, s, s)
 
+    def _compute_dh_matrix(self, alpha_deg, a_mm, theta_deg, d_mm):
+        """Computes Craig's Modified DH 4x4 matrix for Link i relative to Link i-1.
+        Hi = Rot_X(alpha_{i-1}) * Trans_X(a_{i-1}) * Rot_Z(theta_i) * Trans_Z(d_i)
+        """
+        import math
+        alpha = math.radians(float(alpha_deg))
+        a = float(a_mm)
+        theta = math.radians(float(theta_deg))
+        d = float(d_mm)
+
+        crx = math.cos(alpha)
+        srx = math.sin(alpha)
+        crz = math.cos(theta)
+        srz = math.sin(theta)
+
+        mat = vtk.vtkMatrix4x4()
+        # Row 0
+        mat.SetElement(0, 0, crz)
+        mat.SetElement(0, 1, -srz)
+        mat.SetElement(0, 2, 0.0)
+        mat.SetElement(0, 3, a)
+        # Row 1
+        mat.SetElement(1, 0, crx * srz)
+        mat.SetElement(1, 1, crx * crz)
+        mat.SetElement(1, 2, -srx)
+        mat.SetElement(1, 3, -d * srx)
+        # Row 2
+        mat.SetElement(2, 0, srx * srz)
+        mat.SetElement(2, 1, srx * crz)
+        mat.SetElement(2, 2, crx)
+        mat.SetElement(2, 3, d * crx)
+        # Row 3
+        mat.SetElement(3, 0, 0.0)
+        mat.SetElement(3, 1, 0.0)
+        mat.SetElement(3, 2, 0.0)
+        mat.SetElement(3, 3, 1.0)
+        return mat
+
     def update_joints(self, joint_angles):
-        """Updates the rotations of the robot parts.
+        """Updates the positions and rotations of the robot parts based on DH parameters and joint angles.
         joint_angles: list of 6 angles in degrees [J1, J2, J3, J4, J5, J6]
         """
         if not self.vtk_running:
             return
             
+        dh_params = self.config.get_dh_parameters()
+        
         if self.is_ar4_model:
             # Match direction and axes for AR4 Standard
+            d1 = float(dh_params["d"][0])
+            a2 = float(dh_params["a"][1])
+            a3 = float(dh_params["a"][2])
+            d4 = float(dh_params["d"][3])
+            d6 = float(dh_params["d"][5])
+            
+            # Dynamic base offsets based on DH dimensions
+            l1_z = -87.5 * (d1 / 169.77) if d1 != 0 else -87.5
+            l2_x = -64.15 * (a2 / 64.2) if a2 != 0 else -64.15
+            l3_y = 305.0 * (a3 / 305.0) if a3 != 0 else 305.0
+            l4_z = -75.94 * (d4 / 222.63) if d4 != 0 else -75.94
+            l6_x = 43.3 * (d6 / 41.0) if d6 != 0 else 43.3
+            
+            if "Link 1-1.STL" in self.base_transforms:
+                bt = self.base_transforms["Link 1-1.STL"]
+                bt.Identity()
+                bt.RotateX(180)
+                bt.Translate(0, 0, l1_z)
+            if "Link 2-1.STL" in self.base_transforms:
+                bt = self.base_transforms["Link 2-1.STL"]
+                bt.Identity()
+                bt.RotateZ(180)
+                bt.RotateX(270)
+                bt.Translate(l2_x, 77.78, 8.87)
+            if "Link 3-1.STL" in self.base_transforms:
+                bt = self.base_transforms["Link 3-1.STL"]
+                bt.Identity()
+                bt.RotateZ(180)
+                bt.RotateX(180)
+                bt.Translate(0, l3_y, -27.84)
+            if "Link 4-1.STL" in self.base_transforms:
+                bt = self.base_transforms["Link 4-1.STL"]
+                bt.Identity()
+                bt.RotateY(90)
+                bt.RotateX(180)
+                bt.Translate(-36.7, 0, l4_z)
+            if "Link 6-1.STL" in self.base_transforms:
+                bt = self.base_transforms["Link 6-1.STL"]
+                bt.Identity()
+                bt.RotateY(90)
+                bt.Translate(l6_x, 0, 25)
+                
             angles = {
                 "Link 1-1.STL": -joint_angles[0],
                 "Link 2-1.STL": joint_angles[1],
@@ -498,7 +640,7 @@ class VTKViewer:
                 "Link 6-1.STL": joint_angles[5]
             }
             for stl, angle in angles.items():
-                if stl in self.joint_transforms:
+                if stl in self.joint_transforms and stl in self.composite_transforms:
                     jt = self.joint_transforms[stl]
                     jt.Identity()
                     jt.RotateZ(angle)
@@ -508,38 +650,53 @@ class VTKViewer:
                     ct.Concatenate(self.base_transforms[stl])
                     ct.Concatenate(jt)
         else:
-            # Custom robot joint axes evaluation
+            # Custom Robot Models: Full Craig DH Kinematics Chain
             links_cfg = self.config.get_robot_links()
+            
+            # Base assembly transform (user offset if any)
+            base_cfg = links_cfg.get("Base", {})
+            b_pos = base_cfg.get("offset_pos", [0.0, 0.0, 0.0])
+            b_rot = base_cfg.get("offset_rot", [0.0, 0.0, 0.0])
+            b_scale = base_cfg.get("scale", 1.0)
+            if "Base" in self.assemblies:
+                b_tf = vtk.vtkTransform()
+                self._apply_link_base_transform(b_tf, b_pos, b_rot, b_scale)
+                self.assemblies["Base"].SetUserTransform(b_tf)
+
             for i in range(1, 7):
                 link_key = f"Link {i}"
-                if link_key in self.joint_transforms:
-                    cfg = links_cfg.get(link_key, {})
-                    axis_str = cfg.get("joint_axis", "-Z" if i in [1, 3, 4, 5] else "+Z")
-                    angle = joint_angles[i - 1]
+                if link_key in self.assemblies:
+                    alpha = dh_params["alpha"][i - 1]
+                    a = dh_params["a"][i - 1]
+                    theta_offset = dh_params["theta"][i - 1]
+                    d = dh_params["d"][i - 1]
+                    joint_angle = joint_angles[i - 1]
                     
-                    jt = self.joint_transforms[link_key]
-                    jt.Identity()
+                    # Total angle for Craig DH: theta_offset + joint_angle
+                    total_theta = theta_offset + joint_angle
                     
-                    if axis_str == "+Z":
-                        jt.RotateZ(angle)
-                    elif axis_str == "-Z":
-                        jt.RotateZ(-angle)
-                    elif axis_str == "+Y":
-                        jt.RotateY(angle)
-                    elif axis_str == "-Y":
-                        jt.RotateY(-angle)
-                    elif axis_str == "+X":
-                        jt.RotateX(angle)
-                    elif axis_str == "-X":
-                        jt.RotateX(-angle)
-                    else:
-                        jt.RotateZ(angle)
+                    dh_mat = self._compute_dh_matrix(alpha, a, total_theta, d)
+                    dh_tf = vtk.vtkTransform()
+                    dh_tf.SetMatrix(dh_mat)
+                    
+                    # Check if user specified link-level fine tune offset
+                    link_cfg = links_cfg.get(link_key, {})
+                    l_pos = link_cfg.get("offset_pos", [0.0, 0.0, 0.0])
+                    l_rot = link_cfg.get("offset_rot", [0.0, 0.0, 0.0])
+                    l_scale = link_cfg.get("scale", 1.0)
+                    
+                    if l_pos != [0.0, 0.0, 0.0] or l_rot != [0.0, 0.0, 0.0] or l_scale != 1.0:
+                        user_tf = vtk.vtkTransform()
+                        self._apply_link_base_transform(user_tf, l_pos, l_rot, l_scale)
                         
-                    ct = self.composite_transforms[link_key]
-                    ct.Identity()
-                    ct.Concatenate(self.base_transforms[link_key])
-                    ct.Concatenate(jt)
-                    
+                        comp_tf = vtk.vtkTransform()
+                        comp_tf.Identity()
+                        comp_tf.Concatenate(dh_tf)
+                        comp_tf.Concatenate(user_tf)
+                        self.assemblies[link_key].SetUserTransform(comp_tf)
+                    else:
+                        self.assemblies[link_key].SetUserTransform(dh_tf)
+                        
         if self.render_window:
             self.render_window.Render()
 
@@ -595,9 +752,70 @@ class VTKViewer:
         if link_key:
             self.config.update_part_config(link_key, base_name, pos=p, rot=r, scale=s)
             
+        if self.highlight_actor and self.selected_part_name == base_name:
+            self.highlight_actor.SetUserTransform(part_tf)
+            
         if render and self.render_window:
             self.render_window.Render()
         return True
+
+    def highlight_part(self, stl_name):
+        """Highlights the selected STL part with a glowing outline box in the 3D scene."""
+        if not self.vtk_running or not self.renderer:
+            return
+        self.clear_highlight()
+        base_name = os.path.basename(stl_name)
+        actor = self.part_actors.get(base_name)
+        if not actor or not actor.GetMapper():
+            return
+            
+        poly_data = actor.GetMapper().GetInput()
+        if not poly_data:
+            return
+            
+        outline = vtk.vtkOutlineFilter()
+        outline.SetInputData(poly_data)
+        
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(outline.GetOutputPort())
+        
+        box_actor = vtk.vtkActor()
+        box_actor.SetMapper(mapper)
+        box_actor.GetProperty().SetColor(1.0, 0.84, 0.0) # Gold / Yellow glow
+        box_actor.GetProperty().SetLineWidth(2.5)
+        box_actor.SetUserTransform(actor.GetUserTransform())
+        
+        cfg = self.part_configs.get(base_name, {})
+        link_key = cfg.get("link_key")
+        if link_key and link_key in self.assemblies:
+            self.assemblies[link_key].AddPart(box_actor)
+        else:
+            self.renderer.AddActor(box_actor)
+            
+        self.highlight_actor = box_actor
+        self.highlight_link_key = link_key
+        self.selected_part_name = base_name
+        if self.render_window:
+            self.render_window.Render()
+
+    def clear_highlight(self):
+        """Removes the highlight outline actor."""
+        if self.highlight_actor:
+            if hasattr(self, "highlight_link_key") and self.highlight_link_key in self.assemblies:
+                try:
+                    self.assemblies[self.highlight_link_key].RemovePart(self.highlight_actor)
+                except Exception:
+                    pass
+            if self.renderer:
+                try:
+                    self.renderer.RemoveActor(self.highlight_actor)
+                except Exception:
+                    pass
+            self.highlight_actor = None
+            self.highlight_link_key = None
+            self.selected_part_name = None
+            if self.render_window:
+                self.render_window.Render()
 
     def set_part_visibility(self, stl_name, visible, render=True):
         """Toggles visibility of an individual STL component."""
@@ -836,6 +1054,8 @@ class VTKViewer:
         """Removes ALL robot actors from the renderer and clears internal maps."""
         if not self.vtk_running or not self.renderer:
             return
+            
+        self.clear_highlight()
         
         for key, asm in list(self.assemblies.items()):
             try:

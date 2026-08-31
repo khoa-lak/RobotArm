@@ -40,6 +40,8 @@ class MainWindow(ctk.CTk):
         
         # 3. Initialize 3D Viewer & Custom Objects
         self.viewer = VTKViewer(self, self.config)
+        self.viewer.on_part_picked_cb = self._on_3d_part_picked
+        self.viewer.on_object_picked_cb = self._on_3d_object_picked
         self.selected_obj_id = None
         self._updating_obj_ui = False
         
@@ -150,12 +152,13 @@ class MainWindow(ctk.CTk):
         self.connect_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
 
     def _create_jog_frame(self):
-        jog_frame = ctk.CTkLabelFrame(self.right_panel, text="Joint Jog Controls")
+        jog_frame = ctk.CTkLabelFrame(self.right_panel, text="Joint Jog Controls (Góc Khớp °)")
         jog_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
         jog_frame.grid_columnconfigure(0, weight=1)
         
         self.sliders = []
-        self.angle_labels = []
+        self.angle_entries = []
+        self._updating_jog = False
         
         joint_names = ["J1 Base", "J2 Shoulder", "J3 Elbow", "J4 Wrist", "J5 Pitch", "J6 Roll"]
         mins = [-170.0, -42.0, -89.0, -180.0, -105.0, -180.0]
@@ -163,11 +166,11 @@ class MainWindow(ctk.CTk):
         
         for i in range(6):
             j_row = ctk.CTkFrame(jog_frame)
-            j_row.grid(row=i, column=0, padx=5, pady=5, sticky="ew")
+            j_row.grid(row=i, column=0, padx=5, pady=4, sticky="ew")
             j_row.grid_columnconfigure(1, weight=1)
             
-            lbl = ctk.CTkLabel(j_row, text=joint_names[i], width=100)
-            lbl.grid(row=0, column=0, padx=5)
+            lbl = ctk.CTkLabel(j_row, text=joint_names[i], width=85, anchor="w", font=("Arial", 11, "bold"))
+            lbl.grid(row=0, column=0, padx=(5, 2))
             
             slider = ctk.CTkSlider(
                 j_row, 
@@ -176,12 +179,18 @@ class MainWindow(ctk.CTk):
                 command=lambda val, idx=i: self._on_slider_move(idx, val)
             )
             slider.set(self.joint_angles[i])
-            slider.grid(row=0, column=1, padx=5, sticky="ew")
+            slider.grid(row=0, column=1, padx=4, sticky="ew")
             self.sliders.append(slider)
             
-            val_lbl = ctk.CTkLabel(j_row, text=f"{self.joint_angles[i]:.2f}°", width=60)
-            val_lbl.grid(row=0, column=2, padx=5)
-            self.angle_labels.append(val_lbl)
+            entry = ctk.CTkEntry(j_row, width=58, height=26, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, f"{self.joint_angles[i]:.1f}")
+            entry.grid(row=0, column=2, padx=2)
+            entry.bind("<Return>", lambda e, idx=i: self._on_jog_entry_update(idx))
+            entry.bind("<FocusOut>", lambda e, idx=i: self._on_jog_entry_update(idx))
+            self.angle_entries.append(entry)
+            
+            deg_lbl = ctk.CTkLabel(j_row, text="°", width=12, font=("Arial", 11, "bold"))
+            deg_lbl.grid(row=0, column=3, padx=(0, 4))
             
         # Add Go to Home button at the bottom of the Jog frame
         home_btn = ctk.CTkButton(
@@ -223,12 +232,18 @@ class MainWindow(ctk.CTk):
             self.connect_btn.configure(text="Connect", fg_color=["#3B8ED0", "#1F538D"])
 
     def _on_slider_move(self, idx, value):
-        # Update state angle
-        self.joint_angles[idx] = float(value)
-        self.angle_labels[idx].configure(text=f"{value:.2f}°")
+        if self._updating_jog:
+            return
+        val_f = float(value)
+        self.joint_angles[idx] = val_f
+        if hasattr(self, "angle_entries") and idx < len(self.angle_entries):
+            self._updating_jog = True
+            self.angle_entries[idx].delete(0, "end")
+            self.angle_entries[idx].insert(0, f"{val_f:.1f}")
+            self._updating_jog = False
         
         # Save angle to config (save current position)
-        self.config.set(f"J{idx+1}AngCur", f"{value:.4f}")
+        self.config.set(f"J{idx+1}AngCur", f"{val_f:.4f}")
         
         # Trigger 3D model update
         if self.viewer.vtk_running:
@@ -238,6 +253,32 @@ class MainWindow(ctk.CTk):
         self._update_coordinates()
         
         # Send serial updates (or print online mode mock packet)
+        self.serial.send_move_command(self.joint_angles)
+
+    def _on_jog_entry_update(self, idx):
+        if not hasattr(self, "angle_entries") or idx >= len(self.angle_entries):
+            return
+        try:
+            val = float(self.angle_entries[idx].get().strip())
+        except ValueError:
+            return
+        mins = [-170.0, -42.0, -89.0, -180.0, -105.0, -180.0]
+        maxs = [170.0, 90.0, 52.0, 180.0, 105.0, 180.0]
+        clamped = max(mins[idx], min(maxs[idx], val))
+        
+        self.joint_angles[idx] = clamped
+        if idx < len(self.sliders):
+            self.sliders[idx].set(clamped)
+        
+        self._updating_jog = True
+        self.angle_entries[idx].delete(0, "end")
+        self.angle_entries[idx].insert(0, f"{clamped:.1f}")
+        self._updating_jog = False
+        
+        self.config.set(f"J{idx+1}AngCur", f"{clamped:.4f}")
+        if self.viewer.vtk_running:
+            self.viewer.update_joints(self.joint_angles)
+        self._update_coordinates()
         self.serial.send_move_command(self.joint_angles)
 
     def _update_coordinates(self):
@@ -362,21 +403,23 @@ class MainWindow(ctk.CTk):
             messagebox.showerror("Validation Error", f"STL directory does not exist: {stl_dir}")
             return
             
-        # 2. Save values in ConfigManager
+        # 2. Save values in ConfigManager and sync with active model
         for k, v in temp_data.items():
             self.config.config_data[k] = v
+        self.config.sync_active_model_data()
         self.config.save_config()
         
         # 3. Re-initialize Kinematics
         self.kinematics.initialize_kinematics()
         
-        # 4. Reload VTK Viewer model
+        # 4. Reload VTK Viewer model & update joints with current angles
         self.viewer.reload_robot(new_stl_dir=stl_dir)
+        self.viewer.update_joints(self.joint_angles)
         
         # 5. Recompute current position labels
         self._update_coordinates()
         
-        messagebox.showinfo("Success", "Configuration applied and saved successfully!")
+        messagebox.showinfo("Thành công", "Đã áp dụng thông số DH và cập nhật mô hình 3D thành công!")
 
     def _create_program_tab_widgets(self):
         import tkinter as tk
@@ -639,9 +682,14 @@ class MainWindow(ctk.CTk):
 
     def _update_robot_pose(self, angles):
         self.joint_angles = list(angles)
+        self._updating_jog = True
         for i in range(6):
-            self.sliders[i].set(angles[i])
-            self.angle_labels[i].configure(text=f"{angles[i]:.2f}°")
+            if i < len(self.sliders):
+                self.sliders[i].set(angles[i])
+            if hasattr(self, "angle_entries") and i < len(self.angle_entries):
+                self.angle_entries[i].delete(0, "end")
+                self.angle_entries[i].insert(0, f"{angles[i]:.1f}")
+        self._updating_jog = False
         if self.viewer.vtk_running:
             self.viewer.update_joints(self.joint_angles)
         self._update_coordinates()
@@ -711,11 +759,16 @@ class MainWindow(ctk.CTk):
         # 1. Reset state joint angles to 0.0
         self.joint_angles = [0.0] * 6
         
-        # 2. Update sliders, labels and config values
+        # 2. Update sliders, entries and config values
+        self._updating_jog = True
         for i in range(6):
-            self.sliders[i].set(0.0)
-            self.angle_labels[i].configure(text="0.00°")
+            if i < len(self.sliders):
+                self.sliders[i].set(0.0)
+            if hasattr(self, "angle_entries") and i < len(self.angle_entries):
+                self.angle_entries[i].delete(0, "end")
+                self.angle_entries[i].insert(0, "0.0")
             self.config.set(f"J{i+1}AngCur", "0.0000")
+        self._updating_jog = False
             
         # 3. Trigger 3D model update
         if self.viewer.vtk_running:
@@ -843,21 +896,115 @@ class MainWindow(ctk.CTk):
         import_btn.grid(row=0, column=1, padx=2, sticky="ew")
 
         # =========================================================================
-        # 2. Individual STL Component Inspector & Controls (Quản lý chi tiết STL)
+        # 2. Link-Level Alignment & Kinematics (Chọn Khâu & Trục Khớp)
         # =========================================================================
-        part_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="🧩 Quản Lý & Tinh Chỉnh Chi Tiết STL (STL Parts)")
-        part_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        link_sel_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="⚙️ 1. Chọn Khâu / Khớp Cần Cấu Hình (Robot Links)")
+        link_sel_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        link_sel_frame.grid_columnconfigure(0, weight=1)
+
+        display_options = list(self.link_display_map.keys())
+        self.link_selector = ctk.CTkOptionMenu(
+            link_sel_frame,
+            values=display_options,
+            command=self._on_select_link
+        )
+        self.link_selector.grid(row=0, column=0, padx=8, pady=(8, 6), sticky="ew")
+
+        # Joint Axis Menu & Reset / Save
+        axis_row = ctk.CTkFrame(link_sel_frame, fg_color="transparent")
+        axis_row.grid(row=1, column=0, padx=6, pady=(0, 4), sticky="ew")
+        axis_row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(axis_row, text="Trục quay khớp:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=4, pady=2, sticky="w")
+        self.link_axis_menu = ctk.CTkOptionMenu(
+            axis_row,
+            values=[
+                "+Z (Quay quanh Z thuận)",
+                "-Z (Quay quanh Z nghịch)",
+                "+Y (Quay quanh Y thuận)",
+                "-Y (Quay quanh Y nghịch)",
+                "+X (Quay quanh X thuận)",
+                "-X (Quay quanh X nghịch)",
+                "None (Cố định)"
+            ],
+            command=self._on_link_axis_change
+        )
+        self.link_axis_menu.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
+
+        # Link-Level Offset Text Boxes (X, Y, Z mm & Rx, Ry, Rz °)
+        link_pos_card = ctk.CTkFrame(link_sel_frame, fg_color="#242424", corner_radius=6)
+        link_pos_card.grid(row=2, column=0, padx=6, pady=4, sticky="ew")
+        link_pos_card.grid_columnconfigure((1, 3, 5), weight=1)
+        
+        # Row 0: Position X, Y, Z entries
+        ctk.CTkLabel(link_pos_card, text="Vị trí (mm):", font=("Arial", 10, "bold")).grid(row=0, column=0, padx=4, pady=3, sticky="w")
+        self.link_pos_entries = {}
+        for c_idx, ax in enumerate(["X", "Y", "Z"]):
+            ctk.CTkLabel(link_pos_card, text=f"{ax}:", font=("Arial", 10)).grid(row=0, column=c_idx*2+1, padx=(2, 1), pady=3)
+            ent = ctk.CTkEntry(link_pos_card, width=46, height=22, justify="center", font=("Arial", 10, "bold"))
+            ent.insert(0, "0.0")
+            ent.grid(row=0, column=c_idx*2+2, padx=(0, 4), pady=3, sticky="ew")
+            ent.bind("<Return>", lambda e: self._on_link_offset_entry_update())
+            ent.bind("<FocusOut>", lambda e: self._on_link_offset_entry_update())
+            self.link_pos_entries[ax] = ent
+
+        # Row 1: Rotation Rx, Ry, Rz entries
+        ctk.CTkLabel(link_pos_card, text="Góc xoay (°):", font=("Arial", 10, "bold")).grid(row=1, column=0, padx=4, pady=3, sticky="w")
+        self.link_rot_entries = {}
+        for c_idx, ax in enumerate(["Rx", "Ry", "Rz"]):
+            ctk.CTkLabel(link_pos_card, text=f"{ax}:", font=("Arial", 10)).grid(row=1, column=c_idx*2+1, padx=(2, 1), pady=3)
+            ent = ctk.CTkEntry(link_pos_card, width=46, height=22, justify="center", font=("Arial", 10, "bold"))
+            ent.insert(0, "0.0")
+            ent.grid(row=1, column=c_idx*2+2, padx=(0, 4), pady=3, sticky="ew")
+            ent.bind("<Return>", lambda e: self._on_link_offset_entry_update())
+            ent.bind("<FocusOut>", lambda e: self._on_link_offset_entry_update())
+            self.link_rot_entries[ax] = ent
+
+        btn_box = ctk.CTkFrame(link_sel_frame, fg_color="transparent")
+        btn_box.grid(row=3, column=0, padx=6, pady=(2, 8), sticky="ew")
+        btn_box.grid_columnconfigure((0, 1), weight=1)
+
+        self.reset_link_btn = ctk.CTkButton(
+            btn_box,
+            text="🔄 Đặt lại khâu này",
+            fg_color="#555",
+            hover_color="#333",
+            command=self._reset_selected_link_transform
+        )
+        self.reset_link_btn.grid(row=0, column=0, padx=3, pady=2, sticky="ew")
+
+        self.save_links_btn = ctk.CTkButton(
+            btn_box,
+            text="💾 Lưu cấu hình khớp",
+            fg_color="#1eaa59",
+            hover_color="#13773e",
+            command=self._save_robot_links_config
+        )
+        self.save_links_btn.grid(row=0, column=1, padx=3, pady=2, sticky="ew")
+
+        # =========================================================================
+        # 3. Individual STL Component Inspector & Controls (Quản lý chi tiết STL)
+        # =========================================================================
+        part_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="🧩 2. Chi Tiết STL Của Khớp (Click 3D để chọn)")
+        part_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
         part_frame.grid_columnconfigure(0, weight=1)
 
-        # Header: Dropdown to select any STL part in the entire model
-        ctk.CTkLabel(part_frame, text="Chọn chi tiết STL trong Model:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=8, pady=(6, 2), sticky="w")
-        
+        # 3D Picker hint banner
+        hint_lbl = ctk.CTkLabel(
+            part_frame,
+            text="💡 Click CHUỘT TRÁI trực tiếp vào chi tiết 3D để chọn nhanh!",
+            font=("Arial", 10, "italic"),
+            text_color="#f1c40f"
+        )
+        hint_lbl.grid(row=0, column=0, padx=8, pady=(4, 2), sticky="w")
+
+        # Dropdown to select any STL part in the entire model
         self.part_selector = ctk.CTkOptionMenu(
             part_frame,
             values=["(Chưa có chi tiết STL)"],
             command=self._on_select_part
         )
-        self.part_selector.grid(row=1, column=0, padx=6, pady=(0, 6), sticky="ew")
+        self.part_selector.grid(row=1, column=0, padx=6, pady=(2, 6), sticky="ew")
 
         # Action buttons row for selected part: Add STL, Delete STL, Hide/Show, Reset
         part_btn_box = ctk.CTkFrame(part_frame, fg_color="transparent")
@@ -866,7 +1013,7 @@ class MainWindow(ctk.CTk):
 
         self.add_part_btn = ctk.CTkButton(
             part_btn_box,
-            text="✚ Thêm STL",
+            text="✚ Thêm STL vào Khớp",
             height=28,
             font=("Arial", 11),
             fg_color="#1f538d",
@@ -935,6 +1082,7 @@ class MainWindow(ctk.CTk):
             entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
             entry.bind("<Return>", lambda e: self._on_part_entry_update())
             entry.bind("<FocusOut>", lambda e: self._on_part_entry_update())
+            entry.bind("<KeyRelease>", lambda e: self._on_part_entry_update())
             self.part_pos_entries[axis] = entry
 
             unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray")
@@ -993,6 +1141,7 @@ class MainWindow(ctk.CTk):
             entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
             entry.bind("<Return>", lambda e: self._on_part_entry_update())
             entry.bind("<FocusOut>", lambda e: self._on_part_entry_update())
+            entry.bind("<KeyRelease>", lambda e: self._on_part_entry_update())
             self.part_rot_entries[axis] = entry
 
             unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 11, "bold"), text_color="gray")
@@ -1040,7 +1189,14 @@ class MainWindow(ctk.CTk):
         ctk.CTkLabel(part_style_card, text="Tỉ lệ:", font=("Arial", 11, "bold")).grid(row=0, column=2, padx=4, pady=4, sticky="w")
         scale_box = ctk.CTkFrame(part_style_card, fg_color="transparent")
         scale_box.grid(row=0, column=3, padx=4, pady=4, sticky="ew")
-        scale_box.grid_columnconfigure(0, weight=1)
+        scale_box.grid_columnconfigure(1, weight=1)
+
+        self.part_scale_entry = ctk.CTkEntry(scale_box, width=46, height=24, justify="center", font=("Arial", 10, "bold"))
+        self.part_scale_entry.insert(0, "1.00")
+        self.part_scale_entry.grid(row=0, column=0, padx=(0, 2), sticky="w")
+        self.part_scale_entry.bind("<Return>", lambda e: self._on_part_scale_entry_update())
+        self.part_scale_entry.bind("<FocusOut>", lambda e: self._on_part_scale_entry_update())
+        self.part_scale_entry.bind("<KeyRelease>", lambda e: self._on_part_scale_entry_update())
 
         self.part_scale_slider = ctk.CTkSlider(
             scale_box,
@@ -1050,68 +1206,34 @@ class MainWindow(ctk.CTk):
             command=self._on_part_scale_slider_move
         )
         self.part_scale_slider.set(1.0)
-        self.part_scale_slider.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+        self.part_scale_slider.grid(row=0, column=1, padx=(0, 2), sticky="ew")
 
-        self.part_scale_lbl = ctk.CTkLabel(scale_box, text="1.00x", width=40, font=("Arial", 10, "bold"))
-        self.part_scale_lbl.grid(row=0, column=1, sticky="e")
+        # Action Buttons row: Apply entered offsets & Auto-center CAD origin
+        action_row = ctk.CTkFrame(part_frame, fg_color="transparent")
+        action_row.grid(row=6, column=0, padx=6, pady=(6, 8), sticky="ew")
+        action_row.grid_columnconfigure((0, 1), weight=1)
 
-        # =========================================================================
-        # 3. Link-Level Alignment & Kinematics (Căn chỉnh Khâu / Khớp)
-        # =========================================================================
-        link_sel_frame = ctk.CTkLabelFrame(self.links_scroll_frame, text="⚙️ Căn Chỉnh Khâu & Khớp Động Học (Link Kinematics)")
-        link_sel_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
-        link_sel_frame.grid_columnconfigure(0, weight=1)
-
-        display_options = list(self.link_display_map.keys())
-        self.link_selector = ctk.CTkOptionMenu(
-            link_sel_frame,
-            values=display_options,
-            command=self._on_select_link
+        apply_btn = ctk.CTkButton(
+            action_row,
+            text="✅ Áp Dụng Số Đã Nhập",
+            font=("Arial", 11, "bold"),
+            fg_color="#27ae60",
+            hover_color="#1e8449",
+            height=30,
+            command=self._on_part_entry_update
         )
-        self.link_selector.grid(row=0, column=0, padx=8, pady=(8, 6), sticky="ew")
+        apply_btn.grid(row=0, column=0, padx=2, sticky="ew")
 
-        # Joint Axis Menu & Reset / Save
-        axis_row = ctk.CTkFrame(link_sel_frame, fg_color="transparent")
-        axis_row.grid(row=1, column=0, padx=6, pady=(0, 4), sticky="ew")
-        axis_row.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(axis_row, text="Trục quay khớp:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=4, pady=2, sticky="w")
-        self.link_axis_menu = ctk.CTkOptionMenu(
-            axis_row,
-            values=[
-                "+Z (Quay quanh Z thuận)",
-                "-Z (Quay quanh Z nghịch)",
-                "+Y (Quay quanh Y thuận)",
-                "-Y (Quay quanh Y nghịch)",
-                "+X (Quay quanh X thuận)",
-                "-X (Quay quanh X nghịch)",
-                "None (Cố định)"
-            ],
-            command=self._on_link_axis_change
+        auto_align_btn = ctk.CTkButton(
+            action_row,
+            text="🎯 Tự Động Bù Gốc CAD",
+            font=("Arial", 11, "bold"),
+            fg_color="#8e44ad",
+            hover_color="#6c3483",
+            height=30,
+            command=self._on_auto_center_part
         )
-        self.link_axis_menu.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
-
-        btn_box = ctk.CTkFrame(link_sel_frame, fg_color="transparent")
-        btn_box.grid(row=2, column=0, padx=6, pady=(0, 8), sticky="ew")
-        btn_box.grid_columnconfigure((0, 1), weight=1)
-
-        self.reset_link_btn = ctk.CTkButton(
-            btn_box,
-            text="🔄 Đặt lại khâu này",
-            fg_color="#555",
-            hover_color="#333",
-            command=self._reset_selected_link_transform
-        )
-        self.reset_link_btn.grid(row=0, column=0, padx=3, pady=2, sticky="ew")
-
-        self.save_links_btn = ctk.CTkButton(
-            btn_box,
-            text="💾 Lưu cấu hình khớp",
-            fg_color="#1eaa59",
-            hover_color="#13773e",
-            command=self._save_robot_links_config
-        )
-        self.save_links_btn.grid(row=0, column=1, padx=3, pady=2, sticky="ew")
+        auto_align_btn.grid(row=0, column=1, padx=2, sticky="ew")
 
         # Initial UI Population
         self._refresh_part_list_ui()
@@ -1198,8 +1320,9 @@ class MainWindow(ctk.CTk):
         scale = cfg.get("scale", 1.0)
         if hasattr(self, "part_scale_slider"):
             self.part_scale_slider.set(scale)
-        if hasattr(self, "part_scale_lbl"):
-            self.part_scale_lbl.configure(text=f"{scale:.2f}x")
+        if hasattr(self, "part_scale_entry"):
+            self.part_scale_entry.delete(0, "end")
+            self.part_scale_entry.insert(0, f"{scale:.2f}")
             
         # Color
         color = cfg.get("color", "Silver")
@@ -1258,6 +1381,7 @@ class MainWindow(ctk.CTk):
             rx = float(self.part_rot_entries["Rx"].get().strip())
             ry = float(self.part_rot_entries["Ry"].get().strip())
             rz = float(self.part_rot_entries["Rz"].get().strip())
+            scale = float(self.part_scale_entry.get().strip()) if hasattr(self, "part_scale_entry") else 1.0
         except ValueError:
             return
 
@@ -1268,12 +1392,73 @@ class MainWindow(ctk.CTk):
         self.part_rot_sliders["Rx"].set(max(-180.0, min(180.0, rx)))
         self.part_rot_sliders["Ry"].set(max(-180.0, min(180.0, ry)))
         self.part_rot_sliders["Rz"].set(max(-180.0, min(180.0, rz)))
+        if hasattr(self, "part_scale_slider"):
+            self.part_scale_slider.set(max(0.1, min(5.0, scale)))
         self._updating_part_ui = False
 
         self.viewer.update_part_transform(
             self.selected_part_name,
             pos=[x, y, z],
-            rot=[rx, ry, rz]
+            rot=[rx, ry, rz],
+            scale=scale
+        )
+
+    def _on_part_scale_entry_update(self):
+        """Callback when user edits the scale numeric text box."""
+        if self._updating_part_ui or not self.selected_part_name:
+            return
+        if not hasattr(self, "part_scale_entry"):
+            return
+        try:
+            val = float(self.part_scale_entry.get().strip())
+        except ValueError:
+            return
+        val = max(0.01, min(10.0, val))
+        self._updating_part_ui = True
+        if hasattr(self, "part_scale_slider"):
+            self.part_scale_slider.set(max(0.1, min(5.0, val)))
+        self._updating_part_ui = False
+        self.viewer.update_part_transform(self.selected_part_name, scale=val)
+
+    def _on_auto_center_part(self):
+        """Automatically calculates bounding box center of the selected STL part and offsets it to align with joint origin."""
+        if not self.selected_part_name:
+            from tkinter import messagebox
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn một chi tiết STL để căn tâm!")
+            return
+            
+        actor = self.viewer.part_actors.get(self.selected_part_name)
+        if not actor or not actor.GetMapper():
+            return
+            
+        poly_data = actor.GetMapper().GetInput()
+        if not poly_data:
+            return
+            
+        center = poly_data.GetCenter()
+        pos = [-round(center[0], 2), -round(center[1], 2), -round(center[2], 2)]
+        
+        self._updating_part_ui = True
+        for idx, axis in enumerate(["X", "Y", "Z"]):
+            val = pos[idx]
+            if axis in self.part_pos_entries:
+                self.part_pos_entries[axis].delete(0, "end")
+                self.part_pos_entries[axis].insert(0, f"{val:.2f}")
+            if axis in self.part_pos_sliders:
+                if axis in ["X", "Y"]:
+                    self.part_pos_sliders[axis].set(max(-1000.0, min(1000.0, val)))
+                else:
+                    self.part_pos_sliders[axis].set(max(-1000.0, min(1500.0, val)))
+        self._updating_part_ui = False
+        
+        self.viewer.update_part_transform(self.selected_part_name, pos=pos)
+        from tkinter import messagebox
+        messagebox.showinfo(
+            "Căn Tâm Hoàn Tất", 
+            f"Đã bù gốc CAD cho '{self.selected_part_name}':\n"
+            f"• Tọa độ CAD ban đầu: [{center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f}]\n"
+            f"• Offset bù trừ đã đặt: [{pos[0]}, {pos[1]}, {pos[2]}]\n\n"
+            "Chi tiết đã được đưa về đúng tâm trục quay của khớp!"
         )
 
     def _step_part_pos(self, axis, delta):
@@ -1327,8 +1512,11 @@ class MainWindow(ctk.CTk):
         if self._updating_part_ui or not self.selected_part_name:
             return
         s_val = float(val)
-        if hasattr(self, "part_scale_lbl"):
-            self.part_scale_lbl.configure(text=f"{s_val:.2f}x")
+        if hasattr(self, "part_scale_entry"):
+            self._updating_part_ui = True
+            self.part_scale_entry.delete(0, "end")
+            self.part_scale_entry.insert(0, f"{s_val:.2f}")
+            self._updating_part_ui = False
         self.viewer.update_part_transform(self.selected_part_name, scale=s_val)
 
     def _on_part_color_change(self, color_val):
@@ -1378,6 +1566,7 @@ class MainWindow(ctk.CTk):
             self.selected_part_name = os.path.basename(file_path)
             self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
+            self._load_selected_part_to_ui()
             messagebox.showinfo("Thành công", f"Đã thêm chi tiết '{os.path.basename(file_path)}' vào {self.selected_link_key}!")
         else:
             messagebox.showerror("Lỗi", "Không thể nạp file STL!")
@@ -1407,13 +1596,65 @@ class MainWindow(ctk.CTk):
             messagebox.showerror("Lỗi", "Không thể xóa chi tiết STL!")
 
     # -------------------------------------------------------------------------
-    # Link Level Event Handlers
+    # Link Level Event Handlers & 3D Interactive Picking Callbacks
     # -------------------------------------------------------------------------
+
+    def _on_3d_part_picked(self, stl_name):
+        """Callback when user clicks directly on any 3D STL part in the VTK viewport."""
+        def update_ui():
+            try:
+                import os
+                base_name = os.path.basename(stl_name)
+                cfg = self.viewer.part_configs.get(base_name, {})
+                link_key = cfg.get("link_key", "Base")
+                
+                # 1. Switch to Robot Links tab so user immediately sees controls
+                if hasattr(self, "tabview"):
+                    self.tabview.set("Robot Links")
+                    
+                # 2. Select link in link dropdown
+                self.selected_link_key = link_key
+                if hasattr(self, "link_selector") and link_key in self.link_key_to_display:
+                    self.link_selector.set(self.link_key_to_display[link_key])
+                    
+                # 3. Select part in part dropdown
+                self.selected_part_name = base_name
+                if hasattr(self, "part_selector"):
+                    parts = self.viewer.get_all_model_stl_parts()
+                    display_values = [f"[{p['link_key']}] {p['stl_name']}" for p in parts]
+                    matching = [d for d in display_values if base_name in d]
+                    if matching:
+                        self.part_selector.set(matching[0])
+                        
+                # 4. Load UI text boxes & entries with this part's parameters
+                self._load_selected_link_to_ui()
+                self._load_selected_part_to_ui()
+            except Exception as e:
+                print(f"[ERROR] _on_3d_part_picked error: {e}")
+                
+        self.after(0, update_ui)
+
+    def _on_3d_object_picked(self, obj_id):
+        """Callback when user clicks directly on a custom standalone STL object in 3D."""
+        def update_ui():
+            try:
+                if hasattr(self, "tabview"):
+                    self.tabview.set("Objects (STL)")
+                if hasattr(self, "obj_selector"):
+                    self.obj_selector.set(obj_id)
+                self.selected_obj_id = obj_id
+                self._load_object_to_ui()
+            except Exception as e:
+                print(f"[ERROR] _on_3d_object_picked error: {e}")
+                
+        self.after(0, update_ui)
 
     def _on_select_link(self, display_name):
         """Callback when user selects a link in the dropdown."""
         link_key = self.link_display_map.get(display_name, "Base")
         self.selected_link_key = link_key
+        if hasattr(self, "add_part_btn"):
+            self.add_part_btn.configure(text=f"✚ Thêm STL vào {link_key}")
         self._load_selected_link_to_ui()
 
     def _load_selected_link_to_ui(self):
@@ -1431,7 +1672,44 @@ class MainWindow(ctk.CTk):
             else:
                 self.link_axis_menu.set("+Z (Quay quanh Z thuận)")
 
+        # Update Link-Level Position Entries
+        pos = cfg.get("offset_pos", [0.0, 0.0, 0.0])
+        if hasattr(self, "link_pos_entries"):
+            for idx, ax in enumerate(["X", "Y", "Z"]):
+                if ax in self.link_pos_entries:
+                    self.link_pos_entries[ax].delete(0, "end")
+                    self.link_pos_entries[ax].insert(0, f"{pos[idx]:.2f}")
+
+        # Update Link-Level Rotation Entries
+        rot = cfg.get("offset_rot", [0.0, 0.0, 0.0])
+        if hasattr(self, "link_rot_entries"):
+            for idx, ax in enumerate(["Rx", "Ry", "Rz"]):
+                if ax in self.link_rot_entries:
+                    self.link_rot_entries[ax].delete(0, "end")
+                    self.link_rot_entries[ax].insert(0, f"{rot[idx]:.2f}")
+
+        if hasattr(self, "add_part_btn"):
+            self.add_part_btn.configure(text=f"✚ Thêm STL vào {self.selected_link_key}")
+
         self._updating_link_ui = False
+
+    def _on_link_offset_entry_update(self):
+        """Callback when user edits link-level position or rotation text boxes."""
+        if self._updating_link_ui:
+            return
+        if not hasattr(self, "link_pos_entries") or not hasattr(self, "link_rot_entries"):
+            return
+        try:
+            x = float(self.link_pos_entries["X"].get().strip())
+            y = float(self.link_pos_entries["Y"].get().strip())
+            z = float(self.link_pos_entries["Z"].get().strip())
+            rx = float(self.link_rot_entries["Rx"].get().strip())
+            ry = float(self.link_rot_entries["Ry"].get().strip())
+            rz = float(self.link_rot_entries["Rz"].get().strip())
+        except ValueError:
+            return
+            
+        self.viewer.update_link_offset(self.selected_link_key, pos=[x, y, z], rot=[rx, ry, rz])
 
     def _on_link_axis_change(self, axis_val):
         """Callback when user changes joint axis."""
@@ -1506,12 +1784,14 @@ class MainWindow(ctk.CTk):
         self.config.config_data["current_robot_model"] = name
         self.config.config_data["current_robot_model_type"] = "custom"
         self.config.config_data["robot_links"] = blank_links
+        self.config.config_data["custom_stl_objects"] = []
         
         # Save it immediately as a user model
         self.config.save_current_as_model(name, description=f"Model trống tạo mới: {name}")
 
-        # Clear 3D scene entirely
+        # Clear 3D scene and custom objects entirely
         self.viewer.clear_robot()
+        self.viewer.clear_custom_objects()
         if self.viewer.render_window:
             self.viewer.render_window.Render()
 
@@ -1519,6 +1799,7 @@ class MainWindow(ctk.CTk):
         self._refresh_model_list_ui()
         self._refresh_part_list_ui()
         self._load_selected_link_to_ui()
+        self._refresh_objects_list_ui()
         self._reload_dh_entries_from_config()
         self._update_coordinates()
 
@@ -1527,9 +1808,9 @@ class MainWindow(ctk.CTk):
             f"Đã tạo model trống '{name}'.\n\n"
             "Bây giờ hãy:\n"
             "1. Chọn từng Khớp bên dưới\n"
-            "2. Bấm '✚ Thêm STL' để nạp file STL vào khớp\n"
+            "2. Bấm '✚ Thêm STL vào [Khớp]' để nạp file STL vào khớp\n"
             "3. Kéo slider để căn chỉnh vị trí/góc xoay từng chi tiết\n"
-            "4. Bấm '💾 Lưu Mới' để lưu lại hồ sơ model"
+            "4. Bấm '💾 Lưu Mới' nếu muốn lưu thành model khác"
         )
 
     def _on_load_model(self):
@@ -1541,9 +1822,11 @@ class MainWindow(ctk.CTk):
             return
         if self.config.load_robot_model(name):
             self.kinematics.initialize_kinematics()
+            self._load_saved_custom_objects()
             self.viewer.reload_robot()
             self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
+            self._refresh_objects_list_ui()
             self._reload_dh_entries_from_config()
             self._update_coordinates()
             self._refresh_model_list_ui()
@@ -1585,9 +1868,11 @@ class MainWindow(ctk.CTk):
         success, msg = self.config.delete_saved_model(name)
         if success:
             self._refresh_model_list_ui()
+            self._load_saved_custom_objects()
             self.viewer.reload_robot()
             self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
+            self._refresh_objects_list_ui()
             self._reload_dh_entries_from_config()
         messagebox.showinfo("Kết quả", msg)
 
@@ -1633,9 +1918,11 @@ class MainWindow(ctk.CTk):
         from tkinter import messagebox
         if self.config.load_robot_model(preset_name):
             self.kinematics.initialize_kinematics()
+            self._load_saved_custom_objects()
             self.viewer.reload_robot()
             self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
+            self._refresh_objects_list_ui()
             self._reload_dh_entries_from_config()
             self._update_coordinates()
             self._refresh_model_list_ui()
@@ -1660,6 +1947,7 @@ class MainWindow(ctk.CTk):
     # -------------------------------------------------------------------------
     def _load_saved_custom_objects(self):
         """Loads saved custom STL objects configuration from ConfigManager."""
+        self.viewer.clear_custom_objects()
         saved = self.config.get("custom_stl_objects", [])
         if isinstance(saved, list):
             for obj in saved:
@@ -1695,6 +1983,7 @@ class MainWindow(ctk.CTk):
                 "visible": obj["visible"]
             })
         self.config.set("custom_stl_objects", saved_list)
+        self.config.sync_active_model_data()
 
     def _create_objects_tab_widgets(self):
         """Constructs the UI for adding, inspecting, and manipulating custom STL objects."""
@@ -1703,21 +1992,34 @@ class MainWindow(ctk.CTk):
         self.obj_scroll_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.obj_scroll_frame.grid_columnconfigure(0, weight=1)
 
+        # Guidance banner explaining tab purpose
+        guide_banner = ctk.CTkFrame(self.obj_scroll_frame, fg_color="#1e293b", corner_radius=6)
+        guide_banner.grid(row=0, column=0, padx=5, pady=(2, 6), sticky="ew")
+        guide_lbl = ctk.CTkLabel(
+            guide_banner,
+            text="💡 Mẹo: Tab này dùng cho Vật Thể Độc Lập (bàn làm việc, phôi gia công, chướng ngại vật, đồ gá/kẹp thêm).\n👉 Để nạp STL làm khâu/khớp của cánh tay robot, vui lòng chuyển qua tab 'Robot Links'.",
+            font=("Arial", 10),
+            text_color="#94a3b8",
+            justify="left",
+            wraplength=340
+        )
+        guide_lbl.pack(padx=8, pady=6, fill="x")
+
         # 1. Add STL file button
         add_btn = ctk.CTkButton(
             self.obj_scroll_frame,
-            text="📁 Thêm file STL (Add STL File)",
+            text="📁 Thêm Vật Thể STL (Add Object STL)",
             font=("Arial", 13, "bold"),
             height=38,
             fg_color="#1f538d",
             hover_color="#14375e",
             command=self._on_add_stl_file
         )
-        add_btn.grid(row=0, column=0, padx=5, pady=(5, 8), sticky="ew")
+        add_btn.grid(row=1, column=0, padx=5, pady=(5, 8), sticky="ew")
 
         # 2. Selected Object Management Frame
         sel_frame = ctk.CTkLabelFrame(self.obj_scroll_frame, text="Vật thể đang chọn (Selected Object)")
-        sel_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        sel_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
         sel_frame.grid_columnconfigure(0, weight=1)
 
         # Object dropdown
