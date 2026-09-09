@@ -110,13 +110,37 @@ class MainWindow(ctk.CTk):
                 fg_color="#1f538d" if can_u else "#333333",
                 hover_color="#14375e" if can_u else "#333333"
             )
-        if hasattr(self, "redo_btn"):
-            can_r = self.undo_manager.can_redo()
-            self.redo_btn.configure(
-                state="normal" if can_r else "disabled",
-                fg_color="#1f538d" if can_r else "#333333",
-                hover_color="#14375e" if can_r else "#333333"
-            )
+    def _activate_tkinter_focus(self, target_widget=None):
+        """Forces Windows OS keyboard and mouse focus back to Tkinter."""
+        try:
+            import ctypes
+            ctypes.windll.user32.ReleaseCapture()
+            hwnd = (target_widget.winfo_id() if target_widget else None) or self.winfo_id()
+            if hwnd:
+                ctypes.windll.user32.SetFocus(int(hwnd))
+        except Exception:
+            pass
+
+    def _bind_entry_focus_handlers(self, entry_widget, *extra_clickable_widgets):
+        """Ensures 100% reliable focus and text auto-selection when clicking entry or associated labels."""
+        def grab_focus(event=None):
+            self._activate_tkinter_focus(entry_widget)
+            entry_widget.focus_set()
+            if hasattr(entry_widget, "_entry"):
+                entry_widget._entry.focus_set()
+            entry_widget.after(10, lambda: entry_widget.select_range(0, "end"))
+
+        entry_widget.bind("<FocusIn>", grab_focus)
+        entry_widget.bind("<Button-1>", grab_focus)
+        if hasattr(entry_widget, "_entry"):
+            entry_widget._entry.bind("<FocusIn>", grab_focus)
+            entry_widget._entry.bind("<Button-1>", grab_focus)
+        if hasattr(entry_widget, "_canvas"):
+            entry_widget._canvas.bind("<Button-1>", grab_focus)
+            
+        for w in extra_clickable_widgets:
+            if w is not None:
+                w.bind("<Button-1>", grab_focus)
 
     def _create_widgets(self):
         import tkinter as tk
@@ -129,6 +153,10 @@ class MainWindow(ctk.CTk):
         self.left_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
         self.left_panel.grid_columnconfigure(0, weight=1)
         self.main_pane.add(self.left_panel, width=380, minsize=300, stretch="never")
+
+        # Automatically release mouse capture and activate Tkinter whenever mouse crosses into side panels
+        self.left_panel.bind("<Enter>", lambda e: self._activate_tkinter_focus())
+        self.main_pane.bind("<Enter>", lambda e: self._activate_tkinter_focus())
         
         # Top Undo / Redo Toolbar
         self.undo_toolbar = ctk.CTkFrame(self.left_panel, fg_color="#1e1e1e", corner_radius=6)
@@ -166,6 +194,7 @@ class MainWindow(ctk.CTk):
         # Right Panel (Jog / Connection Panel)
         self.right_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
         self.right_panel.grid_columnconfigure(0, weight=1)
+        self.right_panel.bind("<Enter>", lambda e: self._activate_tkinter_focus())
         self.main_pane.add(self.right_panel, width=380, minsize=300, stretch="never")
         
         # Create Tabview inside left_panel (Chỉ 2 Tab chính: Program và Robot Model)
@@ -237,15 +266,16 @@ class MainWindow(ctk.CTk):
             slider.grid(row=0, column=1, padx=4, sticky="ew")
             self.sliders.append(slider)
             
-            entry = ctk.CTkEntry(j_row, width=58, height=26, justify="center", font=("Arial", 11, "bold"))
+            entry = ctk.CTkEntry(j_row, width=64, height=28, justify="center", font=("Arial", 11, "bold"))
             entry.insert(0, f"{self.joint_angles[i]:.1f}")
             entry.grid(row=0, column=2, padx=2)
             entry.bind("<Return>", lambda e, idx=i: self._on_jog_entry_update(idx))
             entry.bind("<FocusOut>", lambda e, idx=i: self._on_jog_entry_update(idx))
             self.angle_entries.append(entry)
             
-            deg_lbl = ctk.CTkLabel(j_row, text="°", width=12, font=("Arial", 11, "bold"))
+            deg_lbl = ctk.CTkLabel(j_row, text="°", width=12, font=("Arial", 11, "bold"), cursor="hand2")
             deg_lbl.grid(row=0, column=3, padx=(0, 4))
+            self._bind_entry_focus_handlers(entry, lbl, deg_lbl)
             
         # Add Go to Home button at the bottom of the Jog frame
         home_btn = ctk.CTkButton(
@@ -1021,19 +1051,21 @@ class MainWindow(ctk.CTk):
             axis_card.grid(row=idx, column=0, padx=4, pady=3, sticky="ew")
             axis_card.grid_columnconfigure(1, weight=1)
 
-            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
+            entry = ctk.CTkEntry(axis_card, width=75, height=28, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.00")
+            entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+            
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22, cursor="hand2")
             lbl.grid(row=0, column=0, padx=(6, 2), pady=3, sticky="w")
 
-            entry = ctk.CTkEntry(axis_card, width=65, height=24, justify="center", font=("Arial", 11, "bold"))
-            entry.insert(0, "0.0")
-            entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+            unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray", cursor="hand2")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=3, sticky="w")
+
             entry.bind("<Return>", lambda e, a=axis: self._commit_link_axis_entry("pos", a))
             entry.bind("<FocusOut>", lambda e, a=axis: self._commit_link_axis_entry("pos", a))
             entry.bind("<KeyRelease>", lambda e, a=axis: self._debounce_link_axis_entry("pos", a))
+            self._bind_entry_focus_handlers(entry, lbl, unit_lbl)
             self.link_pos_entries[axis] = entry
-
-            unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray")
-            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=3, sticky="w")
 
             step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
             step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
@@ -1080,19 +1112,25 @@ class MainWindow(ctk.CTk):
             axis_card.grid(row=idx, column=0, padx=4, pady=3, sticky="ew")
             axis_card.grid_columnconfigure(1, weight=1)
 
-            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=24)
+            entry = ctk.CTkEntry(axis_card, width=75, height=28, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.00")
+            entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=24, cursor="hand2")
             lbl.grid(row=0, column=0, padx=(6, 2), pady=3, sticky="w")
 
-            entry = ctk.CTkEntry(axis_card, width=65, height=24, justify="center", font=("Arial", 11, "bold"))
-            entry.insert(0, "0.0")
-            entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+            unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 10), text_color="gray", cursor="hand2")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=3, sticky="w")
+
             entry.bind("<Return>", lambda e, a=axis: self._commit_link_axis_entry("rot", a))
             entry.bind("<FocusOut>", lambda e, a=axis: self._commit_link_axis_entry("rot", a))
             entry.bind("<KeyRelease>", lambda e, a=axis: self._debounce_link_axis_entry("rot", a))
+            self._bind_entry_focus_handlers(entry, lbl, unit_lbl)
             self.link_rot_entries[axis] = entry
 
-            unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 10), text_color="gray")
+            unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 10), text_color="gray", cursor="hand2")
             unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=3, sticky="w")
+            unit_lbl.bind("<Button-1>", lambda e, ent=entry: (ent.focus_set(), ent.after(10, lambda: ent.select_range(0, "end"))))
 
             step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
             step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
@@ -1168,9 +1206,10 @@ class MainWindow(ctk.CTk):
                 cfg_key = f"J{row_idx+1}{param}DHpar"
                 val = self.config.get(cfg_key, "0.0")
 
-                entry = ctk.CTkEntry(dh_frame, width=60, justify="center")
+                entry = ctk.CTkEntry(dh_frame, width=64, height=28, justify="center", font=("Arial", 11, "bold"))
                 entry.insert(0, str(val))
                 entry.grid(row=row_idx+1, column=col_idx+1, padx=2, pady=3)
+                self._bind_entry_focus_handlers(entry, j_lbl)
                 self.dh_entries[(row_idx+1, param)] = entry
 
         dh_apply_btn = ctk.CTkButton(
@@ -1424,18 +1463,31 @@ class MainWindow(ctk.CTk):
             return
             
         raw_text = entries[axis_name].get().strip()
+        cfg = self.config.get_link_config(self.selected_link_key)
+        cur_list = list(cfg.get("offset_pos" if axis_type == "pos" else "offset_rot", [0.0, 0.0, 0.0]))
+        axis_idx = {"X": 0, "Y": 1, "Z": 2, "Rx": 0, "Ry": 1, "Rz": 2}[axis_name]
+        cur_val = cur_list[axis_idx]
+
         if not raw_text or raw_text in ["-", "+", ".", "-.", "+."]:
+            if format_text:
+                self._updating_link_ui = True
+                entries[axis_name].delete(0, "end")
+                entries[axis_name].insert(0, f"{cur_val:.2f}")
+                self._updating_link_ui = False
             return  # Incomplete intermediate typing - do not reject or crash
             
         try:
             val = float(raw_text)
         except ValueError:
+            if format_text:
+                self._updating_link_ui = True
+                entries[axis_name].delete(0, "end")
+                entries[axis_name].insert(0, f"{cur_val:.2f}")
+                self._updating_link_ui = False
             return
             
-        cfg = self.config.get_link_config(self.selected_link_key)
         if axis_type == "pos":
-            axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis_name]
-            pos = list(cfg.get("offset_pos", [0.0, 0.0, 0.0]))
+            pos = cur_list
             pos[axis_idx] = val
             self.viewer.update_link_offset(self.selected_link_key, pos=pos)
             
@@ -1453,8 +1505,7 @@ class MainWindow(ctk.CTk):
                     entries[axis_name].insert(0, f"{val:.2f}")
                 self._updating_link_ui = False
         else:
-            axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis_name]
-            rot = list(cfg.get("offset_rot", [0.0, 0.0, 0.0]))
+            rot = cur_list
             rot[axis_idx] = val
             self.viewer.update_link_offset(self.selected_link_key, rot=rot)
             
@@ -1501,6 +1552,7 @@ class MainWindow(ctk.CTk):
                     
                 # 3. Load UI controls with this link's parameters
                 self._load_selected_link_to_ui()
+                self._activate_tkinter_focus()
             except Exception as e:
                 print(f"[ERROR] _on_3d_part_picked error: {e}")
                 

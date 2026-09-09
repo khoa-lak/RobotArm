@@ -464,6 +464,10 @@ class ConfigManager:
         name = self.get_active_model_name()
         return models.get(name, models.get("AR4 Standard (Gốc)"))
 
+    def get_active_model(self):
+        """Alias for get_active_model_data."""
+        return self.get_active_model_data()
+
     def load_robot_model(self, model_name):
         """Loads a robot model profile into active configuration."""
         # Also support old preset names for backward compat

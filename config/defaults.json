@@ -12,8 +12,8 @@
     "J6PosLim": "180",
     "J6NegLim": "180",
     "J7PosLim": 500.0,
-    "J1AngCur": "0.0000",
-    "J2AngCur": "0.0000",
+    "J1AngCur": "-49.1566",
+    "J2AngCur": "54.2169",
     "J3AngCur": "0.0000",
     "J4AngCur": "0.0000",
     "J5AngCur": "0.0000",
@@ -163,25 +163,25 @@
     "J5EncCPR": "4000",
     "J6EncCPR": "4000",
     "J1\u0398DHpar": "0",
-    "J2\u0398DHpar": "0",
+    "J2\u0398DHpar": "90",
     "J3\u0398DHpar": "0",
     "J4\u0398DHpar": "0",
     "J5\u0398DHpar": "0",
     "J6\u0398DHpar": "180",
     "J1\u03b1DHpar": "0",
-    "J2\u03b1DHpar": "90",
+    "J2\u03b1DHpar": "0",
     "J3\u03b1DHpar": "0",
     "J4\u03b1DHpar": "-90",
     "J5\u03b1DHpar": "90",
     "J6\u03b1DHpar": "-90",
     "J1dDHpar": "100",
-    "J2dDHpar": "41.5",
+    "J2dDHpar": "100",
     "J3dDHpar": "0",
     "J4dDHpar": "222.63",
     "J5dDHpar": "0",
     "J6dDHpar": "41",
     "J1aDHpar": "0",
-    "J2aDHpar": "-40",
+    "J2aDHpar": "41.5",
     "J3aDHpar": "0",
     "J4aDHpar": "0",
     "J5aDHpar": "0",
@@ -276,16 +276,16 @@
                 "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link2.stl"
             ],
             "offset_pos": [
-                18.18181818181813,
+                -40.0,
                 0.0,
-                0.0
+                55.00821018062402
             ],
             "offset_rot": [
                 0.0,
                 0.0,
                 0.0
             ],
-            "joint_axis": "+Z",
+            "joint_axis": "-Y",
             "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0,
@@ -309,9 +309,122 @@
         },
         "Link 3": {
             "name": "Kh\u1edbp 3 (J3)",
-            "stl_files": [],
+            "stl_files": [
+                "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link3.stl"
+            ],
             "offset_pos": [
                 0.0,
+                -57.47126436781616,
+                165.84564860426917
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "+Y",
+            "color": "Silver",
+            "scale": 1.0,
+            "opacity": 1.0,
+            "part_offsets": {
+                "link3.stl": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Silver",
+                    "visible": true
+                }
+            }
+        },
+        "Link 4": {
+            "name": "Kh\u1edbp 4 (J4)",
+            "stl_files": [
+                "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link4.stl"
+            ],
+            "offset_pos": [
+                -64.03940886699513,
+                0.0,
+                0.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "+X",
+            "color": "Silver",
+            "scale": 1.0,
+            "opacity": 1.0,
+            "part_offsets": {
+                "link4.stl": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Silver",
+                    "visible": true
+                }
+            }
+        },
+        "Link 5": {
+            "name": "Kh\u1edbp 5 (J5)",
+            "stl_files": [
+                "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link5.stl"
+            ],
+            "offset_pos": [
+                -67.32348111658462,
+                14.778325123152854,
+                0.0
+            ],
+            "offset_rot": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "joint_axis": "-Y",
+            "color": "Silver",
+            "scale": 1.0,
+            "opacity": 1.0,
+            "part_offsets": {
+                "link5.stl": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Silver",
+                    "visible": true
+                }
+            }
+        },
+        "Link 6": {
+            "name": "Kh\u1edbp 6 (J6)",
+            "stl_files": [
+                "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link6.stl"
+            ],
+            "offset_pos": [
+                -50.90311986863719,
                 0.0,
                 0.0
             ],
@@ -324,61 +437,23 @@
             "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0,
-            "part_offsets": {}
-        },
-        "Link 4": {
-            "name": "Kh\u1edbp 4 (J4)",
-            "stl_files": [],
-            "offset_pos": [
-                0.0,
-                0.0,
-                0.0
-            ],
-            "offset_rot": [
-                0.0,
-                0.0,
-                0.0
-            ],
-            "joint_axis": "+Y",
-            "color": "Silver",
-            "scale": 1.0,
-            "opacity": 1.0
-        },
-        "Link 5": {
-            "name": "Kh\u1edbp 5 (J5)",
-            "stl_files": [],
-            "offset_pos": [
-                0.0,
-                0.0,
-                0.0
-            ],
-            "offset_rot": [
-                0.0,
-                0.0,
-                0.0
-            ],
-            "joint_axis": "+X",
-            "color": "Silver",
-            "scale": 1.0,
-            "opacity": 1.0
-        },
-        "Link 6": {
-            "name": "Kh\u1edbp 6 (J6)",
-            "stl_files": [],
-            "offset_pos": [
-                0.0,
-                0.0,
-                0.0
-            ],
-            "offset_rot": [
-                0.0,
-                0.0,
-                0.0
-            ],
-            "joint_axis": "+Y",
-            "color": "Silver",
-            "scale": 1.0,
-            "opacity": 1.0
+            "part_offsets": {
+                "link6.stl": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Silver",
+                    "visible": true
+                }
+            }
         }
     },
     "current_robot_model": "LAK",
@@ -393,10 +468,10 @@
                 "J1\u03b1DHpar": "0",
                 "J1dDHpar": "100",
                 "J1aDHpar": "0",
-                "J2\u0398DHpar": "0",
-                "J2\u03b1DHpar": "90",
-                "J2dDHpar": "41.5",
-                "J2aDHpar": "-40",
+                "J2\u0398DHpar": "90",
+                "J2\u03b1DHpar": "0",
+                "J2dDHpar": "100",
+                "J2aDHpar": "41.5",
                 "J3\u0398DHpar": "0",
                 "J3\u03b1DHpar": "0",
                 "J3dDHpar": "0",
@@ -509,16 +584,16 @@
                         "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link2.stl"
                     ],
                     "offset_pos": [
-                        18.18181818181813,
+                        -40.0,
                         0.0,
-                        0.0
+                        55.00821018062402
                     ],
                     "offset_rot": [
                         0.0,
                         0.0,
                         0.0
                     ],
-                    "joint_axis": "+Z",
+                    "joint_axis": "-Y",
                     "color": "Silver",
                     "scale": 1.0,
                     "opacity": 1.0,
@@ -542,9 +617,122 @@
                 },
                 "Link 3": {
                     "name": "Kh\u1edbp 3 (J3)",
-                    "stl_files": [],
+                    "stl_files": [
+                        "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link3.stl"
+                    ],
                     "offset_pos": [
                         0.0,
+                        -57.47126436781616,
+                        165.84564860426917
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "+Y",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0,
+                    "part_offsets": {
+                        "link3.stl": {
+                            "pos": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "rot": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "scale": 1.0,
+                            "color": "Silver",
+                            "visible": true
+                        }
+                    }
+                },
+                "Link 4": {
+                    "name": "Kh\u1edbp 4 (J4)",
+                    "stl_files": [
+                        "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link4.stl"
+                    ],
+                    "offset_pos": [
+                        -64.03940886699513,
+                        0.0,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "+X",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0,
+                    "part_offsets": {
+                        "link4.stl": {
+                            "pos": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "rot": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "scale": 1.0,
+                            "color": "Silver",
+                            "visible": true
+                        }
+                    }
+                },
+                "Link 5": {
+                    "name": "Kh\u1edbp 5 (J5)",
+                    "stl_files": [
+                        "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link5.stl"
+                    ],
+                    "offset_pos": [
+                        -67.32348111658462,
+                        14.778325123152854,
+                        0.0
+                    ],
+                    "offset_rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "joint_axis": "-Y",
+                    "color": "Silver",
+                    "scale": 1.0,
+                    "opacity": 1.0,
+                    "part_offsets": {
+                        "link5.stl": {
+                            "pos": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "rot": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "scale": 1.0,
+                            "color": "Silver",
+                            "visible": true
+                        }
+                    }
+                },
+                "Link 6": {
+                    "name": "Kh\u1edbp 6 (J6)",
+                    "stl_files": [
+                        "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link6.stl"
+                    ],
+                    "offset_pos": [
+                        -50.90311986863719,
                         0.0,
                         0.0
                     ],
@@ -557,61 +745,23 @@
                     "color": "Silver",
                     "scale": 1.0,
                     "opacity": 1.0,
-                    "part_offsets": {}
-                },
-                "Link 4": {
-                    "name": "Kh\u1edbp 4 (J4)",
-                    "stl_files": [],
-                    "offset_pos": [
-                        0.0,
-                        0.0,
-                        0.0
-                    ],
-                    "offset_rot": [
-                        0.0,
-                        0.0,
-                        0.0
-                    ],
-                    "joint_axis": "+Y",
-                    "color": "Silver",
-                    "scale": 1.0,
-                    "opacity": 1.0
-                },
-                "Link 5": {
-                    "name": "Kh\u1edbp 5 (J5)",
-                    "stl_files": [],
-                    "offset_pos": [
-                        0.0,
-                        0.0,
-                        0.0
-                    ],
-                    "offset_rot": [
-                        0.0,
-                        0.0,
-                        0.0
-                    ],
-                    "joint_axis": "+X",
-                    "color": "Silver",
-                    "scale": 1.0,
-                    "opacity": 1.0
-                },
-                "Link 6": {
-                    "name": "Kh\u1edbp 6 (J6)",
-                    "stl_files": [],
-                    "offset_pos": [
-                        0.0,
-                        0.0,
-                        0.0
-                    ],
-                    "offset_rot": [
-                        0.0,
-                        0.0,
-                        0.0
-                    ],
-                    "joint_axis": "+Y",
-                    "color": "Silver",
-                    "scale": 1.0,
-                    "opacity": 1.0
+                    "part_offsets": {
+                        "link6.stl": {
+                            "pos": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "rot": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "scale": 1.0,
+                            "color": "Silver",
+                            "visible": true
+                        }
+                    }
                 }
             },
             "custom_stl_objects": []
