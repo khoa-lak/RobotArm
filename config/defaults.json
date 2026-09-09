@@ -12,9 +12,9 @@
     "J6PosLim": "180",
     "J6NegLim": "180",
     "J7PosLim": 500.0,
-    "J1AngCur": "1.9767",
-    "J2AngCur": "-42.0000",
-    "J3AngCur": "52.0000",
+    "J1AngCur": "0.0000",
+    "J2AngCur": "0.0000",
+    "J3AngCur": "0.0000",
     "J4AngCur": "0.0000",
     "J5AngCur": "0.0000",
     "J6AngCur": "0.0000",
@@ -241,7 +241,7 @@
             "offset_pos": [
                 0.0,
                 0.0,
-                0.0
+                100.0
             ],
             "offset_rot": [
                 0.0,
@@ -276,7 +276,7 @@
                 "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link2.stl"
             ],
             "offset_pos": [
-                0.0,
+                18.18181818181813,
                 0.0,
                 0.0
             ],
@@ -474,7 +474,7 @@
                     "offset_pos": [
                         0.0,
                         0.0,
-                        0.0
+                        100.0
                     ],
                     "offset_rot": [
                         0.0,
@@ -509,7 +509,7 @@
                         "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link2.stl"
                     ],
                     "offset_pos": [
-                        0.0,
+                        18.18181818181813,
                         0.0,
                         0.0
                     ],

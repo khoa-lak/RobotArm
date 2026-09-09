@@ -851,24 +851,57 @@ class VTKViewer:
             cfg["offset_rot"] = [float(r) for r in rot]
         if scale is not None:
             cfg["scale"] = float(scale)
-            
-        base_tf = self.base_transforms.get(link_key)
-        if not base_tf:
-            base_tf = vtk.vtkTransform()
-            self.base_transforms[link_key] = base_tf
-            
-        self._apply_link_base_transform(
-            base_tf, 
-            cfg.get("offset_pos", [0.0, 0.0, 0.0]), 
-            cfg.get("offset_rot", [0.0, 0.0, 0.0]), 
-            cfg.get("scale", 1.0)
-        )
+        self.config.set_link_config(link_key, cfg)
         
-        if link_key in self.visual_assemblies:
-            self.visual_assemblies[link_key].SetUserTransform(base_tf)
-            
+        if hasattr(self.root, "joint_angles"):
+            self.update_joints(self.root.joint_angles)
+        elif render and self.render_window:
+            self.render_window.Render()
+
+    def get_link_bounds(self, link_key):
+        """Returns combined bounding box and dimensions for all STL actors in a link."""
+        actors = self.link_actors.get(link_key, [])
+        if not actors:
+            return None
+        min_x, max_x = float('inf'), float('-inf')
+        min_y, max_y = float('inf'), float('-inf')
+        min_z, max_z = float('inf'), float('-inf')
+        found = False
+        for act, _ in actors:
+            if act and act.GetMapper() and act.GetMapper().GetInput():
+                b = act.GetMapper().GetInput().GetBounds()
+                min_x = min(min_x, b[0])
+                max_x = max(max_x, b[1])
+                min_y = min(min_y, b[2])
+                max_y = max(max_y, b[3])
+                min_z = min(min_z, b[4])
+                max_z = max(max_z, b[5])
+                found = True
+        if not found:
+            return None
+        return {
+            "bounds": (min_x, max_x, min_y, max_y, min_z, max_z),
+            "size": (max_x - min_x, max_y - min_y, max_z - min_z)
+        }
+
+    def set_link_visibility(self, link_key, visible, render=True):
+        """Sets visibility for all STL actors in a link."""
+        actors = self.link_actors.get(link_key, [])
+        for act, _ in actors:
+            if act:
+                act.SetVisibility(1 if visible else 0)
+        cfg = self.config.get_link_config(link_key)
+        cfg["visible"] = bool(visible)
+        self.config.set_link_config(link_key, cfg)
         if render and self.render_window:
             self.render_window.Render()
+
+    def toggle_link_visibility(self, link_key, render=True):
+        """Toggles visibility for all STL actors in a link."""
+        cfg = self.config.get_link_config(link_key)
+        vis = not cfg.get("visible", True)
+        self.set_link_visibility(link_key, vis, render=render)
+        return vis
 
     def update_link_joint_axis(self, link_key, axis_str, render=True):
         """Updates joint axis and recalculates joint rotation."""
