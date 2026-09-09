@@ -12,8 +12,8 @@
     "J6PosLim": "180",
     "J6NegLim": "180",
     "J7PosLim": 500.0,
-    "J1AngCur": "0.0000",
-    "J2AngCur": "-0.5581",
+    "J1AngCur": "1.9767",
+    "J2AngCur": "-42.0000",
     "J3AngCur": "52.0000",
     "J4AngCur": "0.0000",
     "J5AngCur": "0.0000",
@@ -163,26 +163,26 @@
     "J5EncCPR": "4000",
     "J6EncCPR": "4000",
     "J1\u0398DHpar": "0",
-    "J2\u0398DHpar": "-90",
+    "J2\u0398DHpar": "0",
     "J3\u0398DHpar": "0",
     "J4\u0398DHpar": "0",
     "J5\u0398DHpar": "0",
     "J6\u0398DHpar": "180",
     "J1\u03b1DHpar": "0",
-    "J2\u03b1DHpar": "-90",
+    "J2\u03b1DHpar": "90",
     "J3\u03b1DHpar": "0",
     "J4\u03b1DHpar": "-90",
     "J5\u03b1DHpar": "90",
     "J6\u03b1DHpar": "-90",
-    "J1dDHpar": "16",
-    "J2dDHpar": "0",
+    "J1dDHpar": "100",
+    "J2dDHpar": "41.5",
     "J3dDHpar": "0",
     "J4dDHpar": "222.63",
     "J5dDHpar": "0",
     "J6dDHpar": "41",
     "J1aDHpar": "0",
-    "J2aDHpar": "64.2",
-    "J3aDHpar": "305",
+    "J2aDHpar": "-40",
+    "J3aDHpar": "0",
     "J4aDHpar": "0",
     "J5aDHpar": "0",
     "J6aDHpar": "0",
@@ -212,7 +212,7 @@
                 0.0
             ],
             "joint_axis": "None",
-            "color": "Gold",
+            "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0,
             "part_offsets": {
@@ -249,7 +249,7 @@
                 0.0
             ],
             "joint_axis": "+Z",
-            "color": "LimeGreen",
+            "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0,
             "part_offsets": {
@@ -257,7 +257,7 @@
                     "pos": [
                         0.0,
                         0.0,
-                        100.0
+                        0.0
                     ],
                     "rot": [
                         0.0,
@@ -272,7 +272,9 @@
         },
         "Link 2": {
             "name": "Kh\u1edbp 2 (J2)",
-            "stl_files": [],
+            "stl_files": [
+                "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link2.stl"
+            ],
             "offset_pos": [
                 0.0,
                 0.0,
@@ -283,11 +285,27 @@
                 0.0,
                 0.0
             ],
-            "joint_axis": "+X",
-            "color": "DarkOrange",
+            "joint_axis": "+Z",
+            "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0,
-            "part_offsets": {}
+            "part_offsets": {
+                "link2.stl": {
+                    "pos": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "rot": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "scale": 1.0,
+                    "color": "Silver",
+                    "visible": true
+                }
+            }
         },
         "Link 3": {
             "name": "Kh\u1edbp 3 (J3)",
@@ -303,7 +321,7 @@
                 0.0
             ],
             "joint_axis": "+Y",
-            "color": "LimeGreen",
+            "color": "Silver",
             "scale": 1.0,
             "opacity": 1.0,
             "part_offsets": {}
@@ -322,10 +340,9 @@
                 0.0
             ],
             "joint_axis": "+Y",
-            "color": "LimeGreen",
+            "color": "Silver",
             "scale": 1.0,
-            "opacity": 1.0,
-            "part_offsets": {}
+            "opacity": 1.0
         },
         "Link 5": {
             "name": "Kh\u1edbp 5 (J5)",
@@ -341,10 +358,9 @@
                 0.0
             ],
             "joint_axis": "+X",
-            "color": "LimeGreen",
+            "color": "Silver",
             "scale": 1.0,
-            "opacity": 1.0,
-            "part_offsets": {}
+            "opacity": 1.0
         },
         "Link 6": {
             "name": "Kh\u1edbp 6 (J6)",
@@ -360,10 +376,9 @@
                 0.0
             ],
             "joint_axis": "+Y",
-            "color": "LimeGreen",
+            "color": "Silver",
             "scale": 1.0,
-            "opacity": 1.0,
-            "part_offsets": {}
+            "opacity": 1.0
         }
     },
     "current_robot_model": "LAK",
@@ -372,20 +387,20 @@
         "LAK": {
             "type": "custom",
             "name": "LAK",
-            "description": "Model robot LAK (7 kh\u1edbp STL)",
+            "description": "Model tr\u1ed1ng t\u1ea1o m\u1edbi: LAK",
             "dh_parameters": {
                 "J1\u0398DHpar": "0",
                 "J1\u03b1DHpar": "0",
-                "J1dDHpar": "16",
+                "J1dDHpar": "100",
                 "J1aDHpar": "0",
-                "J2\u0398DHpar": "-90",
-                "J2\u03b1DHpar": "-90",
-                "J2dDHpar": "0",
-                "J2aDHpar": "64.2",
+                "J2\u0398DHpar": "0",
+                "J2\u03b1DHpar": "90",
+                "J2dDHpar": "41.5",
+                "J2aDHpar": "-40",
                 "J3\u0398DHpar": "0",
                 "J3\u03b1DHpar": "0",
                 "J3dDHpar": "0",
-                "J3aDHpar": "305",
+                "J3aDHpar": "0",
                 "J4\u0398DHpar": "0",
                 "J4\u03b1DHpar": "-90",
                 "J4dDHpar": "222.63",
@@ -430,7 +445,7 @@
                         0.0
                     ],
                     "joint_axis": "None",
-                    "color": "Gold",
+                    "color": "Silver",
                     "scale": 1.0,
                     "opacity": 1.0,
                     "part_offsets": {
@@ -467,7 +482,7 @@
                         0.0
                     ],
                     "joint_axis": "+Z",
-                    "color": "LimeGreen",
+                    "color": "Silver",
                     "scale": 1.0,
                     "opacity": 1.0,
                     "part_offsets": {
@@ -475,7 +490,7 @@
                             "pos": [
                                 0.0,
                                 0.0,
-                                100.0
+                                0.0
                             ],
                             "rot": [
                                 0.0,
@@ -490,7 +505,9 @@
                 },
                 "Link 2": {
                     "name": "Kh\u1edbp 2 (J2)",
-                    "stl_files": [],
+                    "stl_files": [
+                        "D:/Khoa/Robot/RobotArm/assets/LAK_Robot/link2.stl"
+                    ],
                     "offset_pos": [
                         0.0,
                         0.0,
@@ -501,11 +518,27 @@
                         0.0,
                         0.0
                     ],
-                    "joint_axis": "+X",
-                    "color": "DarkOrange",
+                    "joint_axis": "+Z",
+                    "color": "Silver",
                     "scale": 1.0,
                     "opacity": 1.0,
-                    "part_offsets": {}
+                    "part_offsets": {
+                        "link2.stl": {
+                            "pos": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "rot": [
+                                0.0,
+                                0.0,
+                                0.0
+                            ],
+                            "scale": 1.0,
+                            "color": "Silver",
+                            "visible": true
+                        }
+                    }
                 },
                 "Link 3": {
                     "name": "Kh\u1edbp 3 (J3)",
@@ -521,7 +554,7 @@
                         0.0
                     ],
                     "joint_axis": "+Y",
-                    "color": "LimeGreen",
+                    "color": "Silver",
                     "scale": 1.0,
                     "opacity": 1.0,
                     "part_offsets": {}
@@ -540,10 +573,9 @@
                         0.0
                     ],
                     "joint_axis": "+Y",
-                    "color": "LimeGreen",
+                    "color": "Silver",
                     "scale": 1.0,
-                    "opacity": 1.0,
-                    "part_offsets": {}
+                    "opacity": 1.0
                 },
                 "Link 5": {
                     "name": "Kh\u1edbp 5 (J5)",
@@ -559,10 +591,9 @@
                         0.0
                     ],
                     "joint_axis": "+X",
-                    "color": "LimeGreen",
+                    "color": "Silver",
                     "scale": 1.0,
-                    "opacity": 1.0,
-                    "part_offsets": {}
+                    "opacity": 1.0
                 },
                 "Link 6": {
                     "name": "Kh\u1edbp 6 (J6)",
@@ -578,10 +609,9 @@
                         0.0
                     ],
                     "joint_axis": "+Y",
-                    "color": "LimeGreen",
+                    "color": "Silver",
                     "scale": 1.0,
-                    "opacity": 1.0,
-                    "part_offsets": {}
+                    "opacity": 1.0
                 }
             },
             "custom_stl_objects": []

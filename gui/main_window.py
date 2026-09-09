@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import copy
 import customtkinter as ctk
 from serial.tools import list_ports
 
@@ -10,6 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config_manager import ConfigManager
 from core.kinematics import Kinematics
 from core.serial_driver import SerialDriver
+from core.undo_redo_manager import UndoRedoManager
 from gui.vtk_viewer import VTKViewer
 
 # Set CTK styles
@@ -27,6 +29,12 @@ class MainWindow(ctk.CTk):
         self.config = ConfigManager()
         self.kinematics = Kinematics(self.config)
         self.serial = SerialDriver(feedback_callback=self._on_serial_feedback)
+        
+        # 1b. Initialize Undo/Redo Manager
+        self.undo_manager = UndoRedoManager(max_history=60, on_change_callback=self._update_undo_redo_ui)
+        self._slider_debounce_timers = {}
+        self._pre_slider_states = {}
+        self._entry_debounce_timer = None
         
         # 2. Joint Angles State [J1, J2, J3, J4, J5, J6]
         self.joint_angles = [
@@ -74,11 +82,48 @@ class MainWindow(ctk.CTk):
         self._create_widgets()
         self._update_coordinates()
         
+        # Global Keyboard Shortcuts for Undo / Redo
+        self.bind_all("<Control-z>", lambda e: self._on_undo())
+        self.bind_all("<Control-Z>", lambda e: self._on_undo())
+        self.bind_all("<Control-y>", lambda e: self._on_redo())
+        self.bind_all("<Control-Y>", lambda e: self._on_redo())
+        self.bind_all("<Control-Shift-Z>", lambda e: self._on_redo())
+        self.bind_all("<Control-Shift-z>", lambda e: self._on_redo())
+        
         # Force Tkinter to update and map widgets to obtain valid HWND and layout sizes
         self.update()
         
         # 5. Launch 3D Viewer directly in the right panel
         self._launch_viewer()
+
+    def _on_undo(self):
+        """Executes undo action."""
+        desc = self.undo_manager.undo()
+        if desc:
+            print(f"[UNDO] Đã hoàn tác: {desc}")
+
+    def _on_redo(self):
+        """Executes redo action."""
+        desc = self.undo_manager.redo()
+        if desc:
+            print(f"[REDO] Đã làm lại: {desc}")
+
+    def _update_undo_redo_ui(self):
+        """Updates Undo and Redo button states in toolbar."""
+        if hasattr(self, "undo_btn"):
+            can_u = self.undo_manager.can_undo()
+            self.undo_btn.configure(
+                state="normal" if can_u else "disabled",
+                fg_color="#1f538d" if can_u else "#333333",
+                hover_color="#14375e" if can_u else "#333333"
+            )
+        if hasattr(self, "redo_btn"):
+            can_r = self.undo_manager.can_redo()
+            self.redo_btn.configure(
+                state="normal" if can_r else "disabled",
+                fg_color="#1f538d" if can_r else "#333333",
+                hover_color="#14375e" if can_r else "#333333"
+            )
 
     def _create_widgets(self):
         import tkinter as tk
@@ -91,6 +136,33 @@ class MainWindow(ctk.CTk):
         self.left_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
         self.left_panel.grid_columnconfigure(0, weight=1)
         self.main_pane.add(self.left_panel, width=380, minsize=300, stretch="never")
+        
+        # Top Undo / Redo Toolbar
+        self.undo_toolbar = ctk.CTkFrame(self.left_panel, fg_color="#1e1e1e", corner_radius=6)
+        self.undo_toolbar.pack(fill="x", padx=6, pady=(6, 2))
+        self.undo_toolbar.grid_columnconfigure((0, 1), weight=1)
+        
+        self.undo_btn = ctk.CTkButton(
+            self.undo_toolbar,
+            text="↶ Hoàn tác (Ctrl+Z)",
+            height=28,
+            font=("Arial", 11, "bold"),
+            fg_color="#333333",
+            state="disabled",
+            command=self._on_undo
+        )
+        self.undo_btn.grid(row=0, column=0, padx=3, pady=4, sticky="ew")
+        
+        self.redo_btn = ctk.CTkButton(
+            self.undo_toolbar,
+            text="↷ Làm lại (Ctrl+Y)",
+            height=28,
+            font=("Arial", 11, "bold"),
+            fg_color="#333333",
+            state="disabled",
+            command=self._on_redo
+        )
+        self.redo_btn.grid(row=0, column=1, padx=3, pady=4, sticky="ew")
         
         # Middle Panel (3D Viewer Container)
         self.middle_panel = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="transparent")
@@ -231,9 +303,43 @@ class MainWindow(ctk.CTk):
             self.serial.disconnect()
             self.connect_btn.configure(text="Connect", fg_color=["#3B8ED0", "#1F538D"])
 
+    def _apply_joint_angles_from_undo(self, target_angles):
+        """Restores joint angles from undo/redo without pushing a new undo action."""
+        self.joint_angles = [float(a) for a in target_angles]
+        self._updating_jog = True
+        for i in range(6):
+            if i < len(self.sliders):
+                self.sliders[i].set(self.joint_angles[i])
+            if hasattr(self, "angle_entries") and i < len(self.angle_entries):
+                self.angle_entries[i].delete(0, "end")
+                self.angle_entries[i].insert(0, f"{self.joint_angles[i]:.1f}")
+            self.config.set(f"J{i+1}AngCur", f"{self.joint_angles[i]:.4f}")
+        self._updating_jog = False
+        if self.viewer.vtk_running:
+            self.viewer.update_joints(self.joint_angles)
+        self._update_coordinates()
+        self.serial.send_move_command(self.joint_angles)
+
+    def _finalize_jog_undo(self):
+        """Pushes debounced jog change into UndoRedoManager."""
+        if "jog" in self._pre_slider_states:
+            old_j = list(self._pre_slider_states.pop("jog"))
+            new_j = list(self.joint_angles)
+            if old_j != new_j:
+                self.undo_manager.push(
+                    "Jog góc khớp robot",
+                    lambda o=old_j: self._apply_joint_angles_from_undo(o),
+                    lambda n=new_j: self._apply_joint_angles_from_undo(n)
+                )
+
     def _on_slider_move(self, idx, value):
         if self._updating_jog:
             return
+        
+        # Save snapshot before move starts
+        if "jog" not in self._pre_slider_states:
+            self._pre_slider_states["jog"] = list(self.joint_angles)
+
         val_f = float(value)
         self.joint_angles[idx] = val_f
         if hasattr(self, "angle_entries") and idx < len(self.angle_entries):
@@ -252,8 +358,13 @@ class MainWindow(ctk.CTk):
         # Update XYZ math calculations
         self._update_coordinates()
         
-        # Send serial updates (or print online mode mock packet)
+        # Send serial updates
         self.serial.send_move_command(self.joint_angles)
+
+        # Schedule debounced undo push
+        if "jog" in self._slider_debounce_timers and self._slider_debounce_timers["jog"]:
+            self.after_cancel(self._slider_debounce_timers["jog"])
+        self._slider_debounce_timers["jog"] = self.after(350, self._finalize_jog_undo)
 
     def _on_jog_entry_update(self, idx):
         if not hasattr(self, "angle_entries") or idx >= len(self.angle_entries):
@@ -266,6 +377,7 @@ class MainWindow(ctk.CTk):
         maxs = [170.0, 90.0, 52.0, 180.0, 105.0, 180.0]
         clamped = max(mins[idx], min(maxs[idx], val))
         
+        old_j = list(self.joint_angles)
         self.joint_angles[idx] = clamped
         if idx < len(self.sliders):
             self.sliders[idx].set(clamped)
@@ -280,6 +392,14 @@ class MainWindow(ctk.CTk):
             self.viewer.update_joints(self.joint_angles)
         self._update_coordinates()
         self.serial.send_move_command(self.joint_angles)
+
+        new_j = list(self.joint_angles)
+        if old_j != new_j:
+            self.undo_manager.push(
+                f"Chỉnh góc khớp J{idx+1} -> {clamped:.1f}°",
+                lambda o=old_j: self._apply_joint_angles_from_undo(o),
+                lambda n=new_j: self._apply_joint_angles_from_undo(n)
+            )
 
     def _update_coordinates(self):
         """Calculates XYZ coordinates using FK from joint angles and updates the UI labels."""
@@ -756,26 +876,15 @@ class MainWindow(ctk.CTk):
             self._execute_real_step()
 
     def _go_to_home(self):
-        # 1. Reset state joint angles to 0.0
-        self.joint_angles = [0.0] * 6
-        
-        # 2. Update sliders, entries and config values
-        self._updating_jog = True
-        for i in range(6):
-            if i < len(self.sliders):
-                self.sliders[i].set(0.0)
-            if hasattr(self, "angle_entries") and i < len(self.angle_entries):
-                self.angle_entries[i].delete(0, "end")
-                self.angle_entries[i].insert(0, "0.0")
-            self.config.set(f"J{i+1}AngCur", "0.0000")
-        self._updating_jog = False
-            
-        # 3. Trigger 3D model update
-        if self.viewer.vtk_running:
-            self.viewer.update_joints(self.joint_angles)
-            
-        # 4. Update XYZ math coordinates display
-        self._update_coordinates()
+        old_j = list(self.joint_angles)
+        home_j = [0.0] * 6
+        if old_j != home_j:
+            self.undo_manager.push(
+                "Go to Home (Về Home)",
+                lambda o=old_j: self._apply_joint_angles_from_undo(o),
+                lambda h=home_j: self._apply_joint_angles_from_undo(h)
+            )
+        self._apply_joint_angles_from_undo(home_j)
         
     # -------------------------------------------------------------------------
     # Robot Links Alignment & Individual STL Part Management (Căn chỉnh Khớp & Chi Tiết STL)
@@ -931,37 +1040,125 @@ class MainWindow(ctk.CTk):
         )
         self.link_axis_menu.grid(row=0, column=1, padx=4, pady=2, sticky="ew")
 
-        # Link-Level Offset Text Boxes (X, Y, Z mm & Rx, Ry, Rz °)
-        link_pos_card = ctk.CTkFrame(link_sel_frame, fg_color="#242424", corner_radius=6)
+        # Link-Level Offset Controls (X, Y, Z mm & Rx, Ry, Rz °)
+        link_pos_card = ctk.CTkLabelFrame(link_sel_frame, text="Dời Trục Khớp (Joint Position Offset - mm)")
         link_pos_card.grid(row=2, column=0, padx=6, pady=4, sticky="ew")
-        link_pos_card.grid_columnconfigure((1, 3, 5), weight=1)
-        
-        # Row 0: Position X, Y, Z entries
-        ctk.CTkLabel(link_pos_card, text="Vị trí (mm):", font=("Arial", 10, "bold")).grid(row=0, column=0, padx=4, pady=3, sticky="w")
-        self.link_pos_entries = {}
-        for c_idx, ax in enumerate(["X", "Y", "Z"]):
-            ctk.CTkLabel(link_pos_card, text=f"{ax}:", font=("Arial", 10)).grid(row=0, column=c_idx*2+1, padx=(2, 1), pady=3)
-            ent = ctk.CTkEntry(link_pos_card, width=46, height=22, justify="center", font=("Arial", 10, "bold"))
-            ent.insert(0, "0.0")
-            ent.grid(row=0, column=c_idx*2+2, padx=(0, 4), pady=3, sticky="ew")
-            ent.bind("<Return>", lambda e: self._on_link_offset_entry_update())
-            ent.bind("<FocusOut>", lambda e: self._on_link_offset_entry_update())
-            self.link_pos_entries[ax] = ent
+        link_pos_card.grid_columnconfigure(0, weight=1)
 
-        # Row 1: Rotation Rx, Ry, Rz entries
-        ctk.CTkLabel(link_pos_card, text="Góc xoay (°):", font=("Arial", 10, "bold")).grid(row=1, column=0, padx=4, pady=3, sticky="w")
+        self.link_pos_sliders = {}
+        self.link_pos_entries = {}
+
+        link_pos_axes = [
+            ("X", -1000.0, 1000.0),
+            ("Y", -1000.0, 1000.0),
+            ("Z", -1000.0, 1500.0)
+        ]
+
+        for idx, (axis, min_val, max_val) in enumerate(link_pos_axes):
+            axis_card = ctk.CTkFrame(link_pos_card, fg_color="#2b2b2b", corner_radius=6)
+            axis_card.grid(row=idx, column=0, padx=4, pady=3, sticky="ew")
+            axis_card.grid_columnconfigure(1, weight=1)
+
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=22)
+            lbl.grid(row=0, column=0, padx=(6, 2), pady=3, sticky="w")
+
+            entry = ctk.CTkEntry(axis_card, width=65, height=24, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.0")
+            entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+            entry.bind("<Return>", lambda e: self._on_link_offset_entry_update())
+            entry.bind("<FocusOut>", lambda e: self._on_link_offset_entry_update())
+            entry.bind("<KeyRelease>", lambda e: self._on_link_offset_entry_update())
+            self.link_pos_entries[axis] = entry
+
+            unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=3, sticky="w")
+
+            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
+            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
+
+            for step in [-10, -1, 1, 10]:
+                text = f"{step:+d}" if step > 0 else str(step)
+                btn = ctk.CTkButton(
+                    step_box,
+                    text=text,
+                    width=28,
+                    height=20,
+                    font=("Arial", 9),
+                    command=lambda a=axis, s=step: self._step_link_pos(a, s)
+                )
+                btn.pack(side="left", padx=1)
+
+            slider = ctk.CTkSlider(
+                axis_card,
+                from_=min_val,
+                to=max_val,
+                height=14,
+                command=lambda val, a=axis: self._on_link_pos_slider_move(a, val)
+            )
+            slider.set(0.0)
+            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(1, 4), sticky="ew")
+            self.link_pos_sliders[axis] = slider
+
+        link_rot_card = ctk.CTkLabelFrame(link_sel_frame, text="Định Hướng Khớp (Joint Rotation Offset - độ °)")
+        link_rot_card.grid(row=3, column=0, padx=6, pady=4, sticky="ew")
+        link_rot_card.grid_columnconfigure(0, weight=1)
+
+        self.link_rot_sliders = {}
         self.link_rot_entries = {}
-        for c_idx, ax in enumerate(["Rx", "Ry", "Rz"]):
-            ctk.CTkLabel(link_pos_card, text=f"{ax}:", font=("Arial", 10)).grid(row=1, column=c_idx*2+1, padx=(2, 1), pady=3)
-            ent = ctk.CTkEntry(link_pos_card, width=46, height=22, justify="center", font=("Arial", 10, "bold"))
-            ent.insert(0, "0.0")
-            ent.grid(row=1, column=c_idx*2+2, padx=(0, 4), pady=3, sticky="ew")
-            ent.bind("<Return>", lambda e: self._on_link_offset_entry_update())
-            ent.bind("<FocusOut>", lambda e: self._on_link_offset_entry_update())
-            self.link_rot_entries[ax] = ent
+
+        link_rot_axes = [
+            ("Rx", "Roll (X)"),
+            ("Ry", "Pitch (Y)"),
+            ("Rz", "Yaw (Z)")
+        ]
+
+        for idx, (axis, name) in enumerate(link_rot_axes):
+            axis_card = ctk.CTkFrame(link_rot_card, fg_color="#2b2b2b", corner_radius=6)
+            axis_card.grid(row=idx, column=0, padx=4, pady=3, sticky="ew")
+            axis_card.grid_columnconfigure(1, weight=1)
+
+            lbl = ctk.CTkLabel(axis_card, text=f"{axis}:", font=("Arial", 12, "bold"), width=24)
+            lbl.grid(row=0, column=0, padx=(6, 2), pady=3, sticky="w")
+
+            entry = ctk.CTkEntry(axis_card, width=65, height=24, justify="center", font=("Arial", 11, "bold"))
+            entry.insert(0, "0.0")
+            entry.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+            entry.bind("<Return>", lambda e: self._on_link_offset_entry_update())
+            entry.bind("<FocusOut>", lambda e: self._on_link_offset_entry_update())
+            entry.bind("<KeyRelease>", lambda e: self._on_link_offset_entry_update())
+            self.link_rot_entries[axis] = entry
+
+            unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 10), text_color="gray")
+            unit_lbl.grid(row=0, column=2, padx=(2, 4), pady=3, sticky="w")
+
+            step_box = ctk.CTkFrame(axis_card, fg_color="transparent")
+            step_box.grid(row=0, column=3, padx=2, pady=2, sticky="e")
+
+            for step in [-15, -1, 1, 15]:
+                text = f"{step:+d}°" if step > 0 else f"{step}°"
+                btn = ctk.CTkButton(
+                    step_box,
+                    text=text,
+                    width=30,
+                    height=20,
+                    font=("Arial", 9),
+                    command=lambda a=axis, s=step: self._step_link_rot(a, s)
+                )
+                btn.pack(side="left", padx=1)
+
+            slider = ctk.CTkSlider(
+                axis_card,
+                from_=-180.0,
+                to=180.0,
+                height=14,
+                command=lambda val, a=axis: self._on_link_rot_slider_move(a, val)
+            )
+            slider.set(0.0)
+            slider.grid(row=1, column=0, columnspan=4, padx=6, pady=(1, 4), sticky="ew")
+            self.link_rot_sliders[axis] = slider
 
         btn_box = ctk.CTkFrame(link_sel_frame, fg_color="transparent")
-        btn_box.grid(row=3, column=0, padx=6, pady=(2, 8), sticky="ew")
+        btn_box.grid(row=4, column=0, padx=6, pady=(2, 8), sticky="ew")
         btn_box.grid_columnconfigure((0, 1), weight=1)
 
         self.reset_link_btn = ctk.CTkButton(
@@ -1004,11 +1201,21 @@ class MainWindow(ctk.CTk):
             values=["(Chưa có chi tiết STL)"],
             command=self._on_select_part
         )
-        self.part_selector.grid(row=1, column=0, padx=6, pady=(2, 6), sticky="ew")
+        self.part_selector.grid(row=1, column=0, padx=6, pady=(2, 2), sticky="ew")
+
+        # Bounding box dimensions label
+        self.part_bounds_lbl = ctk.CTkLabel(
+            part_frame,
+            text="Kích thước bao (DxRxC): --",
+            font=("Arial", 10, "bold"),
+            text_color="#38bdf8",
+            anchor="w"
+        )
+        self.part_bounds_lbl.grid(row=2, column=0, padx=8, pady=(0, 4), sticky="ew")
 
         # Action buttons row for selected part: Add STL, Delete STL, Hide/Show, Reset
         part_btn_box = ctk.CTkFrame(part_frame, fg_color="transparent")
-        part_btn_box.grid(row=2, column=0, padx=6, pady=(0, 6), sticky="ew")
+        part_btn_box.grid(row=3, column=0, padx=6, pady=(0, 6), sticky="ew")
         part_btn_box.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self.add_part_btn = ctk.CTkButton(
@@ -1057,7 +1264,7 @@ class MainWindow(ctk.CTk):
 
         # Position Sliders for selected STL part (X, Y, Z mm)
         part_pos_card = ctk.CTkLabelFrame(part_frame, text="Dịch chuyển Chi tiết (Position Offset - mm)")
-        part_pos_card.grid(row=3, column=0, padx=6, pady=4, sticky="ew")
+        part_pos_card.grid(row=4, column=0, padx=6, pady=4, sticky="ew")
         part_pos_card.grid_columnconfigure(0, weight=1)
 
         self.part_pos_sliders = {}
@@ -1116,7 +1323,7 @@ class MainWindow(ctk.CTk):
 
         # Rotation Sliders for selected STL part (Rx, Ry, Rz °)
         part_rot_card = ctk.CTkLabelFrame(part_frame, text="Góc xoay Chi tiết (Rotation - độ °)")
-        part_rot_card.grid(row=4, column=0, padx=6, pady=4, sticky="ew")
+        part_rot_card.grid(row=5, column=0, padx=6, pady=4, sticky="ew")
         part_rot_card.grid_columnconfigure(0, weight=1)
 
         self.part_rot_sliders = {}
@@ -1175,7 +1382,7 @@ class MainWindow(ctk.CTk):
 
         # Scale & Color for selected part
         part_style_card = ctk.CTkFrame(part_frame, fg_color="transparent")
-        part_style_card.grid(row=5, column=0, padx=6, pady=4, sticky="ew")
+        part_style_card.grid(row=6, column=0, padx=6, pady=4, sticky="ew")
         part_style_card.grid_columnconfigure((1, 3), weight=1)
 
         ctk.CTkLabel(part_style_card, text="Màu sắc:", font=("Arial", 11, "bold")).grid(row=0, column=0, padx=4, pady=4, sticky="w")
@@ -1210,7 +1417,7 @@ class MainWindow(ctk.CTk):
 
         # Action Buttons row: Apply entered offsets & Auto-center CAD origin
         action_row = ctk.CTkFrame(part_frame, fg_color="transparent")
-        action_row.grid(row=6, column=0, padx=6, pady=(6, 8), sticky="ew")
+        action_row.grid(row=7, column=0, padx=6, pady=(6, 8), sticky="ew")
         action_row.grid_columnconfigure((0, 1), weight=1)
 
         apply_btn = ctk.CTkButton(
@@ -1282,9 +1489,41 @@ class MainWindow(ctk.CTk):
         except Exception:
             pass
 
+    def _restore_part_state(self, stl_name, state_dict):
+        """Restores an STL part's transform and style state from undo/redo."""
+        if not state_dict or not stl_name:
+            return
+        base_name = os.path.basename(stl_name)
+        pos = state_dict.get("pos", [0.0, 0.0, 0.0])
+        rot = state_dict.get("rot", [0.0, 0.0, 0.0])
+        scale = state_dict.get("scale", 1.0)
+        color = state_dict.get("color", "Silver")
+        vis = state_dict.get("visible", True)
+        
+        self.viewer.update_part_transform(base_name, pos=pos, rot=rot, scale=scale)
+        self.viewer.set_part_color(base_name, color)
+        self.viewer.set_part_visibility(base_name, vis)
+        self.selected_part_name = base_name
+        self._load_selected_part_to_ui()
+
+    def _finalize_part_slider_undo(self, stl_name):
+        """Pushes debounced part slider modification into UndoRedoManager."""
+        key = f"part_{stl_name}"
+        if key in self._pre_slider_states:
+            old_cfg = self._pre_slider_states.pop(key)
+            new_cfg = copy.deepcopy(self.viewer.part_configs.get(stl_name, {}))
+            if old_cfg != new_cfg:
+                self.undo_manager.push(
+                    f"Chỉnh sửa chi tiết '{stl_name}'",
+                    lambda n=stl_name, s=old_cfg: self._restore_part_state(n, s),
+                    lambda n=stl_name, s=new_cfg: self._restore_part_state(n, s)
+                )
+
     def _load_selected_part_to_ui(self):
         """Populates sliders and entries with the selected STL part's configuration."""
         if not self.selected_part_name:
+            if hasattr(self, "part_bounds_lbl"):
+                self.part_bounds_lbl.configure(text="Kích thước bao (DxRxC): --")
             return
             
         cfg = self.viewer.part_configs.get(self.selected_part_name)
@@ -1334,12 +1573,26 @@ class MainWindow(ctk.CTk):
         if hasattr(self, "vis_part_btn"):
             self.vis_part_btn.configure(text="👁️ Ẩn" if vis else "👁️ Hiện")
             
+        # Bounding box dimensions
+        if hasattr(self, "part_bounds_lbl"):
+            info = self.viewer.get_part_bounds(self.selected_part_name)
+            if info:
+                sx, sy, sz = info["size"]
+                self.part_bounds_lbl.configure(text=f"Kích thước bao (DxRxC): {sx:.1f} × {sy:.1f} × {sz:.1f} mm")
+            else:
+                self.part_bounds_lbl.configure(text="Kích thước bao (DxRxC): --")
+            
         self._updating_part_ui = False
 
     def _on_part_pos_slider_move(self, axis, val):
         """Callback when STL part position slider moves."""
         if self._updating_part_ui or not self.selected_part_name:
             return
+        
+        key = f"part_{self.selected_part_name}"
+        if key not in self._pre_slider_states:
+            self._pre_slider_states[key] = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+
         cfg = self.viewer.part_configs.get(self.selected_part_name, {})
         axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
         pos = list(cfg.get("pos", [0.0, 0.0, 0.0]))
@@ -1353,10 +1606,19 @@ class MainWindow(ctk.CTk):
 
         self.viewer.update_part_transform(self.selected_part_name, pos=pos)
 
+        if key in self._slider_debounce_timers and self._slider_debounce_timers[key]:
+            self.after_cancel(self._slider_debounce_timers[key])
+        self._slider_debounce_timers[key] = self.after(350, lambda n=self.selected_part_name: self._finalize_part_slider_undo(n))
+
     def _on_part_rot_slider_move(self, axis, val):
         """Callback when STL part rotation slider moves."""
         if self._updating_part_ui or not self.selected_part_name:
             return
+
+        key = f"part_{self.selected_part_name}"
+        if key not in self._pre_slider_states:
+            self._pre_slider_states[key] = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+
         cfg = self.viewer.part_configs.get(self.selected_part_name, {})
         axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
         rot = list(cfg.get("rot", [0.0, 0.0, 0.0]))
@@ -1369,6 +1631,10 @@ class MainWindow(ctk.CTk):
         self._updating_part_ui = False
 
         self.viewer.update_part_transform(self.selected_part_name, rot=rot)
+
+        if key in self._slider_debounce_timers and self._slider_debounce_timers[key]:
+            self.after_cancel(self._slider_debounce_timers[key])
+        self._slider_debounce_timers[key] = self.after(350, lambda n=self.selected_part_name: self._finalize_part_slider_undo(n))
 
     def _on_part_entry_update(self):
         """Callback when user edits numeric entries for the STL part."""
@@ -1384,6 +1650,8 @@ class MainWindow(ctk.CTk):
             scale = float(self.part_scale_entry.get().strip()) if hasattr(self, "part_scale_entry") else 1.0
         except ValueError:
             return
+
+        old_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
 
         self._updating_part_ui = True
         self.part_pos_sliders["X"].set(max(-1000.0, min(1000.0, x)))
@@ -1403,6 +1671,14 @@ class MainWindow(ctk.CTk):
             scale=scale
         )
 
+        new_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        if old_cfg != new_cfg:
+            self.undo_manager.push(
+                f"Chỉnh tọa độ '{self.selected_part_name}'",
+                lambda n=self.selected_part_name, s=old_cfg: self._restore_part_state(n, s),
+                lambda n=self.selected_part_name, s=new_cfg: self._restore_part_state(n, s)
+            )
+
     def _on_part_scale_entry_update(self):
         """Callback when user edits the scale numeric text box."""
         if self._updating_part_ui or not self.selected_part_name:
@@ -1414,11 +1690,22 @@ class MainWindow(ctk.CTk):
         except ValueError:
             return
         val = max(0.01, min(10.0, val))
+
+        old_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+
         self._updating_part_ui = True
         if hasattr(self, "part_scale_slider"):
             self.part_scale_slider.set(max(0.1, min(5.0, val)))
         self._updating_part_ui = False
         self.viewer.update_part_transform(self.selected_part_name, scale=val)
+
+        new_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        if old_cfg != new_cfg:
+            self.undo_manager.push(
+                f"Chỉnh tỉ lệ '{self.selected_part_name}' -> {val:.2f}x",
+                lambda n=self.selected_part_name, s=old_cfg: self._restore_part_state(n, s),
+                lambda n=self.selected_part_name, s=new_cfg: self._restore_part_state(n, s)
+            )
 
     def _on_auto_center_part(self):
         """Automatically calculates bounding box center of the selected STL part and offsets it to align with joint origin."""
@@ -1431,43 +1718,44 @@ class MainWindow(ctk.CTk):
         if not actor or not actor.GetMapper():
             return
             
-        poly_data = actor.GetMapper().GetInput()
-        if not poly_data:
-            return
+        old_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        pos = self.viewer.center_part(self.selected_part_name)
+        if pos is not None:
+            self._updating_part_ui = True
+            for idx, axis in enumerate(["X", "Y", "Z"]):
+                val = pos[idx]
+                if axis in self.part_pos_entries:
+                    self.part_pos_entries[axis].delete(0, "end")
+                    self.part_pos_entries[axis].insert(0, f"{val:.2f}")
+                if axis in self.part_pos_sliders:
+                    if axis in ["X", "Y"]:
+                        self.part_pos_sliders[axis].set(max(-1000.0, min(1000.0, val)))
+                    else:
+                        self.part_pos_sliders[axis].set(max(-1000.0, min(1500.0, val)))
+            self._updating_part_ui = False
             
-        center = poly_data.GetCenter()
-        pos = [-round(center[0], 2), -round(center[1], 2), -round(center[2], 2)]
-        
-        self._updating_part_ui = True
-        for idx, axis in enumerate(["X", "Y", "Z"]):
-            val = pos[idx]
-            if axis in self.part_pos_entries:
-                self.part_pos_entries[axis].delete(0, "end")
-                self.part_pos_entries[axis].insert(0, f"{val:.2f}")
-            if axis in self.part_pos_sliders:
-                if axis in ["X", "Y"]:
-                    self.part_pos_sliders[axis].set(max(-1000.0, min(1000.0, val)))
-                else:
-                    self.part_pos_sliders[axis].set(max(-1000.0, min(1500.0, val)))
-        self._updating_part_ui = False
-        
-        self.viewer.update_part_transform(self.selected_part_name, pos=pos)
-        from tkinter import messagebox
-        messagebox.showinfo(
-            "Căn Tâm Hoàn Tất", 
-            f"Đã bù gốc CAD cho '{self.selected_part_name}':\n"
-            f"• Tọa độ CAD ban đầu: [{center[0]:.1f}, {center[1]:.1f}, {center[2]:.1f}]\n"
-            f"• Offset bù trừ đã đặt: [{pos[0]}, {pos[1]}, {pos[2]}]\n\n"
-            "Chi tiết đã được đưa về đúng tâm trục quay của khớp!"
-        )
+            new_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+            self.undo_manager.push(
+                f"Căn tâm '{self.selected_part_name}'",
+                lambda n=self.selected_part_name, s=old_cfg: self._restore_part_state(n, s),
+                lambda n=self.selected_part_name, s=new_cfg: self._restore_part_state(n, s)
+            )
+            
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "Căn Tâm Hoàn Tất", 
+                f"Đã bù gốc CAD cho '{self.selected_part_name}':\n"
+                f"• Offset bù trừ đã đặt: [{pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}]\n\n"
+                "Chi tiết đã được đưa về đúng tâm trục quay của khớp!"
+            )
 
     def _step_part_pos(self, axis, delta):
         """Steps STL part position by fixed offset."""
         if not self.selected_part_name:
             return
-        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        old_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
         axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
-        pos = list(cfg.get("pos", [0.0, 0.0, 0.0]))
+        pos = list(old_cfg.get("pos", [0.0, 0.0, 0.0]))
         pos[axis_idx] += float(delta)
 
         self._updating_part_ui = True
@@ -1482,14 +1770,20 @@ class MainWindow(ctk.CTk):
         self._updating_part_ui = False
 
         self.viewer.update_part_transform(self.selected_part_name, pos=pos)
+        new_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        self.undo_manager.push(
+            f"Dịch {axis} '{self.selected_part_name}' ({delta:+g})",
+            lambda n=self.selected_part_name, s=old_cfg: self._restore_part_state(n, s),
+            lambda n=self.selected_part_name, s=new_cfg: self._restore_part_state(n, s)
+        )
 
     def _step_part_rot(self, axis, delta):
         """Steps STL part rotation angle by fixed step."""
         if not self.selected_part_name:
             return
-        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        old_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
         axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
-        rot = list(cfg.get("rot", [0.0, 0.0, 0.0]))
+        rot = list(old_cfg.get("rot", [0.0, 0.0, 0.0]))
         new_val = rot[axis_idx] + float(delta)
         while new_val > 180.0:
             new_val -= 360.0
@@ -1506,11 +1800,22 @@ class MainWindow(ctk.CTk):
         self._updating_part_ui = False
 
         self.viewer.update_part_transform(self.selected_part_name, rot=rot)
+        new_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        self.undo_manager.push(
+            f"Xoay {axis} '{self.selected_part_name}' ({delta:+g}°)",
+            lambda n=self.selected_part_name, s=old_cfg: self._restore_part_state(n, s),
+            lambda n=self.selected_part_name, s=new_cfg: self._restore_part_state(n, s)
+        )
 
     def _on_part_scale_slider_move(self, val):
         """Callback when STL part scale slider moves."""
         if self._updating_part_ui or not self.selected_part_name:
             return
+        
+        key = f"part_{self.selected_part_name}"
+        if key not in self._pre_slider_states:
+            self._pre_slider_states[key] = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+
         s_val = float(val)
         if hasattr(self, "part_scale_entry"):
             self._updating_part_ui = True
@@ -1519,27 +1824,45 @@ class MainWindow(ctk.CTk):
             self._updating_part_ui = False
         self.viewer.update_part_transform(self.selected_part_name, scale=s_val)
 
+        if key in self._slider_debounce_timers and self._slider_debounce_timers[key]:
+            self.after_cancel(self._slider_debounce_timers[key])
+        self._slider_debounce_timers[key] = self.after(350, lambda n=self.selected_part_name: self._finalize_part_slider_undo(n))
+
     def _on_part_color_change(self, color_val):
         """Callback when STL part color changes."""
         if not self.selected_part_name:
             return
+        old_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
         self.viewer.set_part_color(self.selected_part_name, color_val)
+        new_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        self.undo_manager.push(
+            f"Đổi màu '{self.selected_part_name}' -> {color_val}",
+            lambda n=self.selected_part_name, s=old_cfg: self._restore_part_state(n, s),
+            lambda n=self.selected_part_name, s=new_cfg: self._restore_part_state(n, s)
+        )
 
     def _toggle_part_visibility(self):
         """Toggles visibility of the selected STL part."""
         if not self.selected_part_name:
             return
-        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
-        cur_vis = cfg.get("visible", True)
+        old_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        cur_vis = old_cfg.get("visible", True)
         new_vis = not cur_vis
         self.viewer.set_part_visibility(self.selected_part_name, new_vis)
         if hasattr(self, "vis_part_btn"):
             self.vis_part_btn.configure(text="👁️ Ẩn" if new_vis else "👁️ Hiện")
+        new_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        self.undo_manager.push(
+            f"Ẩn/Hiện '{self.selected_part_name}'",
+            lambda n=self.selected_part_name, s=old_cfg: self._restore_part_state(n, s),
+            lambda n=self.selected_part_name, s=new_cfg: self._restore_part_state(n, s)
+        )
 
     def _reset_selected_part_transform(self):
         """Resets the position and rotation of the selected STL part to (0,0,0) and scale=1."""
         if not self.selected_part_name:
             return
+        old_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
         self.viewer.update_part_transform(
             self.selected_part_name,
             pos=[0.0, 0.0, 0.0],
@@ -1547,6 +1870,12 @@ class MainWindow(ctk.CTk):
             scale=1.0
         )
         self._load_selected_part_to_ui()
+        new_cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
+        self.undo_manager.push(
+            f"Đặt lại '{self.selected_part_name}'",
+            lambda n=self.selected_part_name, s=old_cfg: self._restore_part_state(n, s),
+            lambda n=self.selected_part_name, s=new_cfg: self._restore_part_state(n, s)
+        )
 
     def _on_add_stl_to_link(self):
         """Opens file dialog to choose an STL file and adds it to the current link."""
@@ -1561,13 +1890,21 @@ class MainWindow(ctk.CTk):
             messagebox.showerror("Lỗi", f"Không tìm thấy file: {file_path}")
             return
             
-        success = self.viewer.add_stl_to_link(self.selected_link_key, file_path)
+        link_key = self.selected_link_key
+        success = self.viewer.add_stl_to_link(link_key, file_path)
         if success:
-            self.selected_part_name = os.path.basename(file_path)
+            part_name = os.path.basename(file_path)
+            self.selected_part_name = part_name
             self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
             self._load_selected_part_to_ui()
-            messagebox.showinfo("Thành công", f"Đã thêm chi tiết '{os.path.basename(file_path)}' vào {self.selected_link_key}!")
+            
+            self.undo_manager.push(
+                f"Thêm STL '{part_name}' vào {link_key}",
+                lambda l=link_key, p=part_name: self._undo_delete_part_action(l, p, remove=True),
+                lambda l=link_key, fp=file_path: self._redo_add_part_action(l, fp)
+            )
+            messagebox.showinfo("Thành công", f"Đã thêm chi tiết '{part_name}' vào {link_key}!")
         else:
             messagebox.showerror("Lỗi", "Không thể nạp file STL!")
 
@@ -1576,24 +1913,49 @@ class MainWindow(ctk.CTk):
         if not self.selected_part_name:
             return
         from tkinter import messagebox
-        cfg = self.viewer.part_configs.get(self.selected_part_name, {})
+        cfg = copy.deepcopy(self.viewer.part_configs.get(self.selected_part_name, {}))
         link_key = cfg.get("link_key", self.selected_link_key)
+        part_name = self.selected_part_name
+        file_path = cfg.get("file_path", "")
         
         ok = messagebox.askyesno(
             "Xác nhận xóa",
-            f"Bạn có chắc muốn xóa chi tiết '{self.selected_part_name}' khỏi {link_key}?"
+            f"Bạn có chắc muốn xóa chi tiết '{part_name}' khỏi {link_key}?"
         )
         if not ok:
             return
             
-        success = self.viewer.remove_stl_from_link(link_key, self.selected_part_name)
+        success = self.viewer.remove_stl_from_link(link_key, part_name)
         if success:
             self.selected_part_name = None
             self._refresh_part_list_ui()
             self._load_selected_link_to_ui()
+            
+            self.undo_manager.push(
+                f"Xóa STL '{part_name}' khỏi {link_key}",
+                lambda l=link_key, fp=file_path, c=cfg: self._redo_add_part_action(l, fp, c),
+                lambda l=link_key, p=part_name: self._undo_delete_part_action(l, p, remove=True)
+            )
             messagebox.showinfo("Thành công", "Đã xóa chi tiết STL khỏi model!")
         else:
             messagebox.showerror("Lỗi", "Không thể xóa chi tiết STL!")
+
+    def _redo_add_part_action(self, link_key, file_path, saved_cfg=None):
+        """Helper to re-add a part in redo or undo-delete."""
+        if file_path and os.path.exists(file_path):
+            self.viewer.add_stl_to_link(link_key, file_path)
+            part_name = os.path.basename(file_path)
+            if saved_cfg:
+                self._restore_part_state(part_name, saved_cfg)
+            self._refresh_part_list_ui()
+            self._load_selected_link_to_ui()
+
+    def _undo_delete_part_action(self, link_key, part_name, remove=True):
+        """Helper to remove a part in undo-add."""
+        self.viewer.remove_stl_from_link(link_key, part_name)
+        self.selected_part_name = None
+        self._refresh_part_list_ui()
+        self._load_selected_link_to_ui()
 
     # -------------------------------------------------------------------------
     # Link Level Event Handlers & 3D Interactive Picking Callbacks
@@ -1672,30 +2034,86 @@ class MainWindow(ctk.CTk):
             else:
                 self.link_axis_menu.set("+Z (Quay quanh Z thuận)")
 
-        # Update Link-Level Position Entries
+        # Update Link-Level Position Entries & Sliders
         pos = cfg.get("offset_pos", [0.0, 0.0, 0.0])
         if hasattr(self, "link_pos_entries"):
             for idx, ax in enumerate(["X", "Y", "Z"]):
                 if ax in self.link_pos_entries:
                     self.link_pos_entries[ax].delete(0, "end")
                     self.link_pos_entries[ax].insert(0, f"{pos[idx]:.2f}")
+                if hasattr(self, "link_pos_sliders") and ax in self.link_pos_sliders:
+                    self.link_pos_sliders[ax].set(pos[idx])
 
-        # Update Link-Level Rotation Entries
+        # Update Link-Level Rotation Entries & Sliders
         rot = cfg.get("offset_rot", [0.0, 0.0, 0.0])
         if hasattr(self, "link_rot_entries"):
             for idx, ax in enumerate(["Rx", "Ry", "Rz"]):
                 if ax in self.link_rot_entries:
                     self.link_rot_entries[ax].delete(0, "end")
                     self.link_rot_entries[ax].insert(0, f"{rot[idx]:.2f}")
+                if hasattr(self, "link_rot_sliders") and ax in self.link_rot_sliders:
+                    self.link_rot_sliders[ax].set(rot[idx])
 
         if hasattr(self, "add_part_btn"):
             self.add_part_btn.configure(text=f"✚ Thêm STL vào {self.selected_link_key}")
 
         self._updating_link_ui = False
 
+    def _on_link_pos_slider_move(self, axis, val):
+        """Callback when link position slider moves."""
+        if self._updating_link_ui or not hasattr(self, "selected_link_key"):
+            return
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
+        cfg = self.config.get_link_config(self.selected_link_key)
+        pos = list(cfg.get("offset_pos", [0.0, 0.0, 0.0]))
+        pos[axis_idx] = float(val)
+
+        self._updating_link_ui = True
+        if hasattr(self, "link_pos_entries") and axis in self.link_pos_entries:
+            self.link_pos_entries[axis].delete(0, "end")
+            self.link_pos_entries[axis].insert(0, f"{val:.2f}")
+        self._updating_link_ui = False
+
+        self.viewer.update_link_offset(self.selected_link_key, pos=pos)
+
+    def _on_link_rot_slider_move(self, axis, val):
+        """Callback when link rotation slider moves."""
+        if self._updating_link_ui or not hasattr(self, "selected_link_key"):
+            return
+        axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
+        cfg = self.config.get_link_config(self.selected_link_key)
+        rot = list(cfg.get("offset_rot", [0.0, 0.0, 0.0]))
+        rot[axis_idx] = float(val)
+
+        self._updating_link_ui = True
+        if hasattr(self, "link_rot_entries") and axis in self.link_rot_entries:
+            self.link_rot_entries[axis].delete(0, "end")
+            self.link_rot_entries[axis].insert(0, f"{val:.2f}")
+        self._updating_link_ui = False
+
+        self.viewer.update_link_offset(self.selected_link_key, rot=rot)
+
+    def _step_link_pos(self, axis, step):
+        """Step adjusts link position."""
+        if not hasattr(self, "link_pos_sliders") or axis not in self.link_pos_sliders:
+            return
+        cur_val = self.link_pos_sliders[axis].get()
+        new_val = cur_val + step
+        self.link_pos_sliders[axis].set(new_val)
+        self._on_link_pos_slider_move(axis, new_val)
+
+    def _step_link_rot(self, axis, step):
+        """Step adjusts link rotation."""
+        if not hasattr(self, "link_rot_sliders") or axis not in self.link_rot_sliders:
+            return
+        cur_val = self.link_rot_sliders[axis].get()
+        new_val = cur_val + step
+        self.link_rot_sliders[axis].set(new_val)
+        self._on_link_rot_slider_move(axis, new_val)
+
     def _on_link_offset_entry_update(self):
         """Callback when user edits link-level position or rotation text boxes."""
-        if self._updating_link_ui:
+        if self._updating_link_ui or not hasattr(self, "selected_link_key"):
             return
         if not hasattr(self, "link_pos_entries") or not hasattr(self, "link_rot_entries"):
             return
@@ -1709,6 +2127,17 @@ class MainWindow(ctk.CTk):
         except ValueError:
             return
             
+        self._updating_link_ui = True
+        if hasattr(self, "link_pos_sliders"):
+            if "X" in self.link_pos_sliders: self.link_pos_sliders["X"].set(x)
+            if "Y" in self.link_pos_sliders: self.link_pos_sliders["Y"].set(y)
+            if "Z" in self.link_pos_sliders: self.link_pos_sliders["Z"].set(z)
+        if hasattr(self, "link_rot_sliders"):
+            if "Rx" in self.link_rot_sliders: self.link_rot_sliders["Rx"].set(rx)
+            if "Ry" in self.link_rot_sliders: self.link_rot_sliders["Ry"].set(ry)
+            if "Rz" in self.link_rot_sliders: self.link_rot_sliders["Rz"].set(rz)
+        self._updating_link_ui = False
+
         self.viewer.update_link_offset(self.selected_link_key, pos=[x, y, z], rot=[rx, ry, rz])
 
     def _on_link_axis_change(self, axis_val):
@@ -2028,42 +2457,62 @@ class MainWindow(ctk.CTk):
             values=["(Chưa có vật thể nào)"],
             command=self._on_select_object
         )
-        self.obj_selector.grid(row=0, column=0, columnspan=3, padx=8, pady=(8, 6), sticky="ew")
+        self.obj_selector.grid(row=0, column=0, columnspan=4, padx=8, pady=(8, 4), sticky="ew")
 
-        # Action buttons row
+        # Bounding box dimensions label
+        self.obj_bounds_lbl = ctk.CTkLabel(
+            sel_frame,
+            text="Kích thước bao (DxRxC): --",
+            font=("Arial", 10, "bold"),
+            text_color="#38bdf8",
+            anchor="w"
+        )
+        self.obj_bounds_lbl.grid(row=1, column=0, columnspan=4, padx=8, pady=(0, 4), sticky="ew")
+
+        # Action buttons row: Vis, Center, Reset, Delete
         btn_frame = ctk.CTkFrame(sel_frame, fg_color="transparent")
-        btn_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=(0, 8), sticky="ew")
-        btn_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        btn_frame.grid(row=2, column=0, columnspan=4, padx=5, pady=(0, 8), sticky="ew")
+        btn_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self.obj_vis_btn = ctk.CTkButton(
             btn_frame,
             text="👁️ Ẩn/Hiện",
-            width=70,
+            width=58,
             command=self._toggle_object_visibility
         )
         self.obj_vis_btn.grid(row=0, column=0, padx=2, pady=2, sticky="ew")
 
+        self.obj_center_btn = ctk.CTkButton(
+            btn_frame,
+            text="🎯 Căn tâm",
+            width=58,
+            fg_color="#8e44ad",
+            hover_color="#6c3483",
+            command=self._on_auto_center_object
+        )
+        self.obj_center_btn.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+
         self.obj_reset_btn = ctk.CTkButton(
             btn_frame,
             text="🔄 Đặt lại",
-            width=70,
+            width=58,
             command=self._reset_object_transform
         )
-        self.obj_reset_btn.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+        self.obj_reset_btn.grid(row=0, column=2, padx=2, pady=2, sticky="ew")
 
         self.obj_del_btn = ctk.CTkButton(
             btn_frame,
             text="🗑️ Xóa",
-            width=70,
+            width=58,
             fg_color="#c0392b",
             hover_color="#962d22",
             command=self._delete_object
         )
-        self.obj_del_btn.grid(row=0, column=2, padx=2, pady=2, sticky="ew")
+        self.obj_del_btn.grid(row=0, column=3, padx=2, pady=2, sticky="ew")
 
         # 3. Position Controls Frame (X, Y, Z mm)
         pos_frame = ctk.CTkLabelFrame(self.obj_scroll_frame, text="Điều chỉnh Tọa độ (Position - mm)")
-        pos_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
+        pos_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
         pos_frame.grid_columnconfigure(0, weight=1)
 
         self.pos_sliders = {}
@@ -2089,6 +2538,7 @@ class MainWindow(ctk.CTk):
             entry.grid(row=0, column=1, padx=2, pady=4, sticky="w")
             entry.bind("<Return>", lambda e: self._on_entry_update())
             entry.bind("<FocusOut>", lambda e: self._on_entry_update())
+            entry.bind("<KeyRelease>", lambda e: self._on_entry_key_release())
             self.pos_entries[axis] = entry
 
             unit_lbl = ctk.CTkLabel(axis_card, text="mm", font=("Arial", 10), text_color="gray")
@@ -2124,7 +2574,7 @@ class MainWindow(ctk.CTk):
 
         # 4. Rotation Controls Frame (Rx, Ry, Rz deg)
         rot_frame = ctk.CTkLabelFrame(self.obj_scroll_frame, text="Điều chỉnh Góc quay (Rotation - độ °)")
-        rot_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
+        rot_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")
         rot_frame.grid_columnconfigure(0, weight=1)
 
         self.rot_sliders = {}
@@ -2149,6 +2599,7 @@ class MainWindow(ctk.CTk):
             entry.grid(row=0, column=1, padx=2, pady=4, sticky="w")
             entry.bind("<Return>", lambda e: self._on_entry_update())
             entry.bind("<FocusOut>", lambda e: self._on_entry_update())
+            entry.bind("<KeyRelease>", lambda e: self._on_entry_key_release())
             self.rot_entries[axis] = entry
 
             unit_lbl = ctk.CTkLabel(axis_card, text="°", font=("Arial", 11, "bold"), text_color="gray")
@@ -2183,7 +2634,7 @@ class MainWindow(ctk.CTk):
 
         # 5. Attributes & Attachment Frame
         attr_frame = ctk.CTkLabelFrame(self.obj_scroll_frame, text="Gắn kết & Hiển thị (Parent & Visuals)")
-        attr_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")
+        attr_frame.grid(row=5, column=0, padx=5, pady=5, sticky="ew")
         attr_frame.grid_columnconfigure(1, weight=1)
 
         # Parent attachment option
@@ -2225,12 +2676,19 @@ class MainWindow(ctk.CTk):
         )
         self.color_menu.grid(row=1, column=1, padx=8, pady=5, sticky="ew")
 
-        # Scale slider
+        # Scale controls: entry, slider, presets
         ctk.CTkLabel(attr_frame, text="Tỉ lệ (Scale):", font=("Arial", 11, "bold")).grid(row=2, column=0, padx=8, pady=5, sticky="w")
         scale_box = ctk.CTkFrame(attr_frame, fg_color="transparent")
         scale_box.grid(row=2, column=1, padx=8, pady=5, sticky="ew")
-        scale_box.grid_columnconfigure(0, weight=1)
+        scale_box.grid_columnconfigure(1, weight=1)
         
+        self.scale_entry = ctk.CTkEntry(scale_box, width=52, height=24, justify="center", font=("Arial", 10, "bold"))
+        self.scale_entry.insert(0, "1.00")
+        self.scale_entry.grid(row=0, column=0, padx=(0, 4), sticky="w")
+        self.scale_entry.bind("<Return>", lambda e: self._on_scale_entry_update())
+        self.scale_entry.bind("<FocusOut>", lambda e: self._on_scale_entry_update())
+        self.scale_entry.bind("<KeyRelease>", lambda e: self._on_scale_entry_key_release())
+
         self.scale_slider = ctk.CTkSlider(
             scale_box,
             from_=0.1,
@@ -2239,10 +2697,26 @@ class MainWindow(ctk.CTk):
             command=self._on_scale_slider_move
         )
         self.scale_slider.set(1.0)
-        self.scale_slider.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        self.scale_slider.grid(row=0, column=1, padx=(0, 5), sticky="ew")
         
-        self.scale_lbl = ctk.CTkLabel(scale_box, text="1.00x", width=45, font=("Arial", 11, "bold"))
-        self.scale_lbl.grid(row=0, column=1, sticky="e")
+        self.scale_lbl = ctk.CTkLabel(scale_box, text="1.00x", width=42, font=("Arial", 10, "bold"))
+        self.scale_lbl.grid(row=0, column=2, sticky="e")
+
+        # Scale Quick Presets row
+        preset_box = ctk.CTkFrame(scale_box, fg_color="transparent")
+        preset_box.grid(row=1, column=0, columnspan=3, pady=(2, 0), sticky="ew")
+        for p_txt, p_val in [("1.0x", 1.0), ("0.001x (m)", 0.001), ("0.1x (cm)", 0.1), ("25.4x (in)", 25.4)]:
+            p_btn = ctk.CTkButton(
+                preset_box,
+                text=p_txt,
+                height=18,
+                width=38,
+                font=("Arial", 8, "bold"),
+                fg_color="#374151",
+                hover_color="#4b5563",
+                command=lambda v=p_val: self._apply_custom_scale(v)
+            )
+            p_btn.pack(side="left", padx=1)
 
         # Opacity slider
         ctk.CTkLabel(attr_frame, text="Độ trong suốt:", font=("Arial", 11, "bold")).grid(row=3, column=0, padx=8, pady=(5, 8), sticky="w")
@@ -2282,9 +2756,14 @@ class MainWindow(ctk.CTk):
                 self.rot_entries[axis].insert(0, "0.0")
                 self.rot_sliders[axis].set(0.0)
             self.scale_slider.set(1.0)
+            if hasattr(self, "scale_entry"):
+                self.scale_entry.delete(0, "end")
+                self.scale_entry.insert(0, "1.00")
             self.scale_lbl.configure(text="1.00x")
             self.opacity_slider.set(1.0)
             self.opacity_lbl.configure(text="100%")
+            if hasattr(self, "obj_bounds_lbl"):
+                self.obj_bounds_lbl.configure(text="Kích thước bao (DxRxC): --")
             self._updating_obj_ui = False
             return
 
@@ -2332,7 +2811,10 @@ class MainWindow(ctk.CTk):
             self.rot_sliders[axis].set(max(-180.0, min(180.0, val)))
 
         scale = obj.get("scale", 1.0)
-        self.scale_slider.set(scale)
+        self.scale_slider.set(scale if scale <= 5.0 else 5.0)
+        if hasattr(self, "scale_entry"):
+            self.scale_entry.delete(0, "end")
+            self.scale_entry.insert(0, f"{scale:.3g}")
         self.scale_lbl.configure(text=f"{scale:.2f}x")
 
         opacity = obj.get("opacity", 1.0)
@@ -2348,7 +2830,64 @@ class MainWindow(ctk.CTk):
         vis = obj.get("visible", True)
         self.obj_vis_btn.configure(text="👁️ Ẩn" if vis else "👁️ Hiện")
 
+        # Bounding box calculation
+        if hasattr(self, "obj_bounds_lbl"):
+            info = self.viewer.get_custom_object_bounds(self.selected_obj_id)
+            if info:
+                sx, sy, sz = info["size"]
+                self.obj_bounds_lbl.configure(text=f"Kích thước bao (DxRxC): {sx:.1f} × {sy:.1f} × {sz:.1f} mm")
+            else:
+                self.obj_bounds_lbl.configure(text="Kích thước bao (DxRxC): --")
+
         self._updating_obj_ui = False
+
+    def _restore_custom_object_state(self, obj_id, state_dict):
+        """Restores a custom object's state from undo/redo."""
+        if not state_dict or not obj_id:
+            return
+        if obj_id not in self.viewer.custom_objects:
+            if "file_path" in state_dict and os.path.exists(state_dict["file_path"]):
+                self.viewer.add_custom_object(
+                    obj_id=obj_id,
+                    file_path=state_dict["file_path"],
+                    name=state_dict.get("name"),
+                    position=state_dict.get("position", [0.0, 0.0, 0.0]),
+                    rotation=state_dict.get("rotation", [0.0, 0.0, 0.0]),
+                    scale=state_dict.get("scale", 1.0),
+                    color=state_dict.get("color", "LimeGreen"),
+                    opacity=state_dict.get("opacity", 1.0),
+                    parent=state_dict.get("parent", "World (Tọa độ thế giới)"),
+                    visible=state_dict.get("visible", True)
+                )
+        else:
+            self.viewer.update_custom_object(
+                obj_id,
+                position=state_dict.get("position"),
+                rotation=state_dict.get("rotation"),
+                scale=state_dict.get("scale"),
+                color=state_dict.get("color"),
+                opacity=state_dict.get("opacity"),
+                parent=state_dict.get("parent"),
+                visible=state_dict.get("visible"),
+                name=state_dict.get("name")
+            )
+        self.selected_obj_id = obj_id
+        self._save_custom_objects()
+        self._refresh_objects_list_ui()
+
+    def _finalize_obj_slider_undo(self, obj_id):
+        """Pushes debounced custom object slider modification into UndoRedoManager."""
+        key = f"obj_{obj_id}"
+        if key in self._pre_slider_states:
+            old_st = self._pre_slider_states.pop(key)
+            if obj_id in self.viewer.custom_objects:
+                new_st = copy.deepcopy(self.viewer.custom_objects[obj_id])
+                if old_st != new_st:
+                    self.undo_manager.push(
+                        f"Chỉnh sửa vật thể '{new_st.get('name', obj_id)}'",
+                        lambda oid=obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+                        lambda oid=obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+                    )
 
     def _on_add_stl_file(self):
         """Opens file dialog to browse for an STL file and adds it to the scene."""
@@ -2389,10 +2928,31 @@ class MainWindow(ctk.CTk):
         self._save_custom_objects()
         self._refresh_objects_list_ui()
 
+        saved_snapshot = copy.deepcopy(self.viewer.custom_objects[obj_id])
+        self.undo_manager.push(
+            f"Thêm vật thể '{unique_name}'",
+            lambda oid=obj_id: self._undo_remove_custom_object(oid),
+            lambda oid=obj_id, s=saved_snapshot: self._restore_custom_object_state(oid, s)
+        )
+
+    def _undo_remove_custom_object(self, obj_id):
+        """Helper to remove custom object on undo add."""
+        if obj_id in self.viewer.custom_objects:
+            self.viewer.remove_custom_object(obj_id)
+            if self.selected_obj_id == obj_id:
+                self.selected_obj_id = None
+            self._save_custom_objects()
+            self._refresh_objects_list_ui()
+
     def _on_pos_slider_move(self, axis, val):
         """Callback when position slider moves."""
         if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
+        
+        key = f"obj_{self.selected_obj_id}"
+        if key not in self._pre_slider_states:
+            self._pre_slider_states[key] = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+
         obj = self.viewer.custom_objects[self.selected_obj_id]
         axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
         pos = list(obj["position"])
@@ -2406,10 +2966,19 @@ class MainWindow(ctk.CTk):
         self.viewer.update_custom_object(self.selected_obj_id, position=pos)
         self._save_custom_objects()
 
+        if key in self._slider_debounce_timers and self._slider_debounce_timers[key]:
+            self.after_cancel(self._slider_debounce_timers[key])
+        self._slider_debounce_timers[key] = self.after(350, lambda oid=self.selected_obj_id: self._finalize_obj_slider_undo(oid))
+
     def _on_rot_slider_move(self, axis, val):
         """Callback when rotation slider moves."""
         if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
+
+        key = f"obj_{self.selected_obj_id}"
+        if key not in self._pre_slider_states:
+            self._pre_slider_states[key] = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+
         obj = self.viewer.custom_objects[self.selected_obj_id]
         axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
         rot = list(obj["rotation"])
@@ -2423,8 +2992,20 @@ class MainWindow(ctk.CTk):
         self.viewer.update_custom_object(self.selected_obj_id, rotation=rot)
         self._save_custom_objects()
 
+        if key in self._slider_debounce_timers and self._slider_debounce_timers[key]:
+            self.after_cancel(self._slider_debounce_timers[key])
+        self._slider_debounce_timers[key] = self.after(350, lambda oid=self.selected_obj_id: self._finalize_obj_slider_undo(oid))
+
+    def _on_entry_key_release(self):
+        """Debounced live entry update when user is typing numbers."""
+        if self._updating_obj_ui or not self.selected_obj_id:
+            return
+        if self._entry_debounce_timer:
+            self.after_cancel(self._entry_debounce_timer)
+        self._entry_debounce_timer = self.after(350, self._on_entry_update)
+
     def _on_entry_update(self):
-        """Callback when user edits numeric entries and presses Enter or leaves focus."""
+        """Callback when user edits numeric entries and presses Enter, leaves focus, or pauses typing."""
         if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
         try:
@@ -2436,6 +3017,8 @@ class MainWindow(ctk.CTk):
             rz = float(self.rot_entries["Rz"].get().strip())
         except ValueError:
             return
+
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
 
         self._updating_obj_ui = True
         self.pos_sliders["X"].set(max(-1000.0, min(1000.0, x)))
@@ -2453,13 +3036,21 @@ class MainWindow(ctk.CTk):
         )
         self._save_custom_objects()
 
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        if old_st != new_st:
+            self.undo_manager.push(
+                f"Chỉnh tọa độ '{new_st.get('name')}'",
+                lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+                lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+            )
+
     def _step_pos(self, axis, delta):
         """Steps position by a fixed offset (+10, +1, -1, -10)."""
         if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
-        obj = self.viewer.custom_objects[self.selected_obj_id]
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
         axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
-        pos = list(obj["position"])
+        pos = list(old_st["position"])
         pos[axis_idx] += float(delta)
 
         self._updating_obj_ui = True
@@ -2474,13 +3065,20 @@ class MainWindow(ctk.CTk):
         self.viewer.update_custom_object(self.selected_obj_id, position=pos)
         self._save_custom_objects()
 
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        self.undo_manager.push(
+            f"Dịch {axis} '{new_st.get('name')}' ({delta:+g}mm)",
+            lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+            lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+        )
+
     def _step_rot(self, axis, delta):
         """Steps rotation angle by a fixed step."""
         if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
-        obj = self.viewer.custom_objects[self.selected_obj_id]
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
         axis_idx = {"Rx": 0, "Ry": 1, "Rz": 2}[axis]
-        rot = list(obj["rotation"])
+        rot = list(old_st["rotation"])
         new_val = rot[axis_idx] + float(delta)
         while new_val > 180.0:
             new_val -= 360.0
@@ -2497,53 +3095,182 @@ class MainWindow(ctk.CTk):
         self.viewer.update_custom_object(self.selected_obj_id, rotation=rot)
         self._save_custom_objects()
 
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        self.undo_manager.push(
+            f"Xoay {axis} '{new_st.get('name')}' ({delta:+g}°)",
+            lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+            lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+        )
+
     def _on_parent_change(self, parent_val):
         """Callback when parent attachment dropdown changes."""
         if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
         self.viewer.update_custom_object(self.selected_obj_id, parent=parent_val)
         self._save_custom_objects()
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        self.undo_manager.push(
+            f"Đổi khâu gắn '{new_st.get('name')}' -> {parent_val}",
+            lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+            lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+        )
 
     def _on_color_change(self, color_val):
         """Callback when color dropdown changes."""
         if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
         self.viewer.update_custom_object(self.selected_obj_id, color=color_val)
         self._save_custom_objects()
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        self.undo_manager.push(
+            f"Đổi màu '{new_st.get('name')}' -> {color_val}",
+            lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+            lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+        )
 
     def _on_scale_slider_move(self, val):
         """Callback when scale slider moves."""
         if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
+        
+        key = f"obj_{self.selected_obj_id}"
+        if key not in self._pre_slider_states:
+            self._pre_slider_states[key] = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+
         scale_val = float(val)
         self.scale_lbl.configure(text=f"{scale_val:.2f}x")
+        if hasattr(self, "scale_entry"):
+            self._updating_obj_ui = True
+            self.scale_entry.delete(0, "end")
+            self.scale_entry.insert(0, f"{scale_val:.3g}")
+            self._updating_obj_ui = False
+
         self.viewer.update_custom_object(self.selected_obj_id, scale=scale_val)
         self._save_custom_objects()
+
+        if key in self._slider_debounce_timers and self._slider_debounce_timers[key]:
+            self.after_cancel(self._slider_debounce_timers[key])
+        self._slider_debounce_timers[key] = self.after(350, lambda oid=self.selected_obj_id: self._finalize_obj_slider_undo(oid))
+
+    def _on_scale_entry_key_release(self):
+        """Debounced update when user is typing scale value."""
+        if self._updating_obj_ui or not self.selected_obj_id:
+            return
+        if self._entry_debounce_timer:
+            self.after_cancel(self._entry_debounce_timer)
+        self._entry_debounce_timer = self.after(350, self._on_scale_entry_update)
+
+    def _on_scale_entry_update(self):
+        """Callback when user edits the scale numeric text box."""
+        if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        try:
+            val = float(self.scale_entry.get().strip())
+        except ValueError:
+            return
+        val = max(0.0001, min(10000.0, val))
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+
+        self._updating_obj_ui = True
+        self.scale_slider.set(val if val <= 5.0 else 5.0)
+        self.scale_lbl.configure(text=f"{val:.2f}x")
+        self._updating_obj_ui = False
+
+        self.viewer.update_custom_object(self.selected_obj_id, scale=val)
+        self._save_custom_objects()
+
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        if old_st != new_st:
+            self.undo_manager.push(
+                f"Chỉnh tỉ lệ '{new_st.get('name')}' -> {val:.3g}x",
+                lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+                lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+            )
+
+    def _apply_custom_scale(self, scale_val):
+        """Applies a preset scale value."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+
+        self._updating_obj_ui = True
+        self.scale_slider.set(scale_val if scale_val <= 5.0 else 5.0)
+        if hasattr(self, "scale_entry"):
+            self.scale_entry.delete(0, "end")
+            self.scale_entry.insert(0, f"{scale_val:.3g}")
+        self.scale_lbl.configure(text=f"{scale_val:.2f}x")
+        self._updating_obj_ui = False
+
+        self.viewer.update_custom_object(self.selected_obj_id, scale=scale_val)
+        self._save_custom_objects()
+
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        self.undo_manager.push(
+            f"Đặt tỉ lệ '{new_st.get('name')}' -> {scale_val:.3g}x",
+            lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+            lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+        )
 
     def _on_opacity_slider_move(self, val):
         """Callback when opacity slider moves."""
         if self._updating_obj_ui or not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
+        
+        key = f"obj_{self.selected_obj_id}"
+        if key not in self._pre_slider_states:
+            self._pre_slider_states[key] = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+
         op_val = float(val)
         self.opacity_lbl.configure(text=f"{int(op_val*100)}%")
         self.viewer.update_custom_object(self.selected_obj_id, opacity=op_val)
         self._save_custom_objects()
 
+        if key in self._slider_debounce_timers and self._slider_debounce_timers[key]:
+            self.after_cancel(self._slider_debounce_timers[key])
+        self._slider_debounce_timers[key] = self.after(350, lambda oid=self.selected_obj_id: self._finalize_obj_slider_undo(oid))
+
     def _toggle_object_visibility(self):
         """Toggles the visibility of the selected object."""
         if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
-        obj = self.viewer.custom_objects[self.selected_obj_id]
-        cur_vis = obj.get("visible", True)
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        cur_vis = old_st.get("visible", True)
         new_vis = not cur_vis
         self.viewer.update_custom_object(self.selected_obj_id, visible=new_vis)
         self.obj_vis_btn.configure(text="👁️ Ẩn" if new_vis else "👁️ Hiện")
         self._save_custom_objects()
 
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        self.undo_manager.push(
+            f"Ẩn/Hiện '{new_st.get('name')}'",
+            lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+            lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+        )
+
+    def _on_auto_center_object(self):
+        """Auto centers geometric center of custom object at origin."""
+        if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
+            return
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        pos = self.viewer.center_custom_object(self.selected_obj_id)
+        if pos is not None:
+            self._load_selected_obj_to_ui()
+            self._save_custom_objects()
+
+            new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+            self.undo_manager.push(
+                f"Căn tâm '{new_st.get('name')}'",
+                lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+                lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+            )
+
     def _reset_object_transform(self):
         """Resets the position and rotation of the selected object to (0,0,0)."""
         if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
+        old_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
         self.viewer.update_custom_object(
             self.selected_obj_id,
             position=[0.0, 0.0, 0.0],
@@ -2553,17 +3280,33 @@ class MainWindow(ctk.CTk):
         self._load_selected_obj_to_ui()
         self._save_custom_objects()
 
+        new_st = copy.deepcopy(self.viewer.custom_objects[self.selected_obj_id])
+        self.undo_manager.push(
+            f"Đặt lại '{new_st.get('name')}'",
+            lambda oid=self.selected_obj_id, s=old_st: self._restore_custom_object_state(oid, s),
+            lambda oid=self.selected_obj_id, s=new_st: self._restore_custom_object_state(oid, s)
+        )
+
     def _delete_object(self):
         """Deletes the selected object after user confirmation."""
         if not self.selected_obj_id or self.selected_obj_id not in self.viewer.custom_objects:
             return
         from tkinter import messagebox
         obj_name = self.viewer.custom_objects[self.selected_obj_id].get("name", "vật thể")
+        obj_id = self.selected_obj_id
+        saved_snapshot = copy.deepcopy(self.viewer.custom_objects[obj_id])
+
         if messagebox.askyesno("Xác nhận xóa", f"Bạn có chắc muốn xóa vật thể '{obj_name}' khỏi không gian 3D?"):
-            self.viewer.remove_custom_object(self.selected_obj_id)
+            self.viewer.remove_custom_object(obj_id)
             self.selected_obj_id = None
             self._save_custom_objects()
             self._refresh_objects_list_ui()
+
+            self.undo_manager.push(
+                f"Xóa vật thể '{obj_name}'",
+                lambda oid=obj_id, s=saved_snapshot: self._restore_custom_object_state(oid, s),
+                lambda oid=obj_id: self._undo_remove_custom_object(oid)
+            )
 
     def on_closing(self):
         # Graceful cleanup

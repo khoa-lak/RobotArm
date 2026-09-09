@@ -189,6 +189,24 @@ class ConfigManager:
         self.save_robot_links(links)
         self.sync_active_model_data()
 
+    def update_link_config(self, link_key, pos=None, rot=None, joint_axis=None, scale=None, color=None, opacity=None):
+        """Updates link-level configuration attributes (offset_pos, offset_rot, joint_axis, etc.)."""
+        cfg = self.get_link_config(link_key)
+        if pos is not None:
+            cfg["offset_pos"] = [float(p) for p in pos]
+        if rot is not None:
+            cfg["offset_rot"] = [float(r) for r in rot]
+        if joint_axis is not None:
+            cfg["joint_axis"] = joint_axis
+        if scale is not None:
+            cfg["scale"] = float(scale)
+        if color is not None:
+            cfg["color"] = color
+        if opacity is not None:
+            cfg["opacity"] = float(opacity)
+        self.set_link_config(link_key, cfg)
+        return cfg
+
     def add_stl_to_link(self, link_key, file_path):
         """Adds an STL file to a robot link if not already present."""
         cfg = self.get_link_config(link_key)
